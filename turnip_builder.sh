@@ -93,9 +93,22 @@ prepare_workdir(){
 
 		cd mesa
 
-		# TEST 2: Reverting only the second commit
-		echo -e "${green}TESTING: Reverting only commit 639d7946...${nocolor}" $'\n'
-		git revert --no-edit 639d7946c71f9ff2340a17456ba11313ed543960 &> /dev/null
+		# NEW STRATEGY: Create and apply a reverse patch for the problematic commit
+		echo -e "${green}Generating reverse patch for commit 639d7946...${nocolor}" $'\n'
+		# The -R flag creates a patch that does the reverse of the commit
+		git format-patch -R -1 639d7946c71f9ff2340a17456ba11313ed543960
+		
+		echo -e "${green}Applying reverse patch...${nocolor}" $'\n'
+		# Apply the .patch file that was just created in the current directory
+		if git apply *.patch; then
+			echo -e "${green}Reverse patch applied successfully!${nocolor}"
+			# We need to commit the changes from the patch to get a new commit hash
+			git add .
+			git commit -m "Applied reverse patch for 639d7946 to fix regression"
+		else
+			echo -e "${red}Failed to apply reverse patch. There might be conflicts.${nocolor}"
+			exit 1
+		fi
 		
 		commit_short=$(git rev-parse --short HEAD)
 		commit=$(git rev-parse HEAD)
@@ -195,8 +208,8 @@ EOF
 	if [ ! -f "$compiled_lib" ]; then
 		echo -e "${red}--------------------------------------------------------------------${nocolor}"
 		echo -e "${red}COMPILATION FAILED: The file libvulkan_freedreno.so was not created.${nocolor}"
-		echo -e "${red}This is likely because the 'git revert' commands broke the source code.${nocolor}"
-		echo -e "${red}Check the compilation log above for the specific C++ error message.${nocolor}"
+		echo -e "${red}This is likely because the reverse patch could not be applied cleanly or caused build errors.${nocolor}"
+		echo -e "${red}Check the compilation log above for the specific error message.${nocolor}"
 		echo -e "${red}--------------------------------------------------------------------${nocolor}"
 		exit 1
 	fi
