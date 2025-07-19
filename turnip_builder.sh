@@ -89,9 +89,15 @@ prepare_workdir(){
 		fi
 		
 		echo "Cloning mesa ..." $'\n'
-		git clone --depth=1 "$mesasrc"
+		git clone "$mesasrc"
 
 		cd mesa
+
+		echo -e "${green}Reverting MR !35443 (commit 3ef5950d)...${nocolor}" $'\n'
+		git revert --no-edit 3ef5950d83637e7ed6ed76953930e10408d277be &> /dev/null
+		echo -e "${green}Reverting commit 639d7946...${nocolor}" $'\n'
+		git revert --no-edit 639d7946c71f9ff2340a17456ba11313ed543960 &> /dev/null
+		
 		commit_short=$(git rev-parse --short HEAD)
 		commit=$(git rev-parse HEAD)
 		mesa_version=$(cat VERSION | xargs)
@@ -181,10 +187,23 @@ endian = 'little'
 EOF
 
 	echo "Generating build files ..." $'\n'
-	meson setup build-android-aarch64 --cross-file "$workdir"/mesa/android-aarch64 -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled &> "$workdir"/meson_log
+	# EDIT 1: Show meson output in real-time while also saving to log
+	meson setup build-android-aarch64 --cross-file "$workdir"/mesa/android-aarch64 -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir"/meson_log
 
 	echo "Compiling build files ..." $'\n'
-	ninja -C build-android-aarch64 &> "$workdir"/ninja_log
+	# EDIT 2: Show ninja output in real-time while also saving to log
+	ninja -C build-android-aarch64 2>&1 | tee "$workdir"/ninja_log
+
+	# EDIT 3: Add explicit check for the compiled library and fail with a clear error message
+	local compiled_lib="$workdir/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so"
+	if [ ! -f "$compiled_lib" ]; then
+		echo -e "${red}--------------------------------------------------------------------${nocolor}"
+		echo -e "${red}COMPILATION FAILED: The file libvulkan_freedreno.so was not created.${nocolor}"
+		echo -e "${red}This is likely because the 'git revert' commands broke the source code.${nocolor}"
+		echo -e "${red}Check the compilation log above for the specific C++ error message.${nocolor}"
+		echo -e "${red}--------------------------------------------------------------------${nocolor}"
+		exit 1
+	fi
 }
 
 port_lib_for_adrenotool(){
@@ -193,10 +212,6 @@ port_lib_for_adrenotool(){
 	cd "$workdir"
 	patchelf --set-soname vulkan.adreno.so libvulkan_freedreno.so
 	mv libvulkan_freedreno.so vulkan.ad07XX.so
-
-	if ! [ -a vulkan.ad07XX.so ]; then
-		echo -e "$red Build failed! $nocolor" && exit 1
-	fi
 
 	mkdir -p "$packagedir" && cd "$_"
 
