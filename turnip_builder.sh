@@ -93,9 +93,9 @@ prepare_workdir(){
 
 		cd mesa
 
-		# TEST 1: Reverting only the first commit
-		echo -e "${green}TESTING: Reverting MR !35443 (commit 3ef5950d)...${nocolor}" $'\n'
-		git revert --no-edit 3ef5950d83637e7ed6ed76953930e10408d277be &> /dev/null
+		# TEST 2: Reverting only the second commit
+		echo -e "${green}TESTING: Reverting only commit 639d7946...${nocolor}" $'\n'
+		git revert --no-edit 639d7946c71f9ff2340a17456ba11313ed543960 &> /dev/null
 		
 		commit_short=$(git rev-parse --short HEAD)
 		commit=$(git rev-parse HEAD)
@@ -186,14 +186,11 @@ endian = 'little'
 EOF
 
 	echo "Generating build files ..." $'\n'
-	# EDIT 1: Show meson output in real-time while also saving to log
 	meson setup build-android-aarch64 --cross-file "$workdir"/mesa/android-aarch64 -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir"/meson_log
 
 	echo "Compiling build files ..." $'\n'
-	# EDIT 2: Show ninja output in real-time while also saving to log
 	ninja -C build-android-aarch64 2>&1 | tee "$workdir"/ninja_log
 
-	# EDIT 3: Add explicit check for the compiled library and fail with a clear error message
 	local compiled_lib="$workdir/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so"
 	if [ ! -f "$compiled_lib" ]; then
 		echo -e "${red}--------------------------------------------------------------------${nocolor}"
