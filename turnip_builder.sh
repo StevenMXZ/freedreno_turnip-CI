@@ -93,10 +93,9 @@ prepare_workdir(){
 
 		cd mesa
 
-		echo -e "${green}Reverting MR !35443 (commit 3ef5950d)...${nocolor}" $'\n'
+		# TEST 1: Reverting only the first commit
+		echo -e "${green}TESTING: Reverting MR !35443 (commit 3ef5950d)...${nocolor}" $'\n'
 		git revert --no-edit 3ef5950d83637e7ed6ed76953930e10408d277be &> /dev/null
-		echo -e "${green}Reverting commit 639d7946...${nocolor}" $'\n'
-		git revert --no-edit 639d7946c71f9ff2340a17456ba11313ed543960 &> /dev/null
 		
 		commit_short=$(git rev-parse --short HEAD)
 		commit=$(git rev-parse HEAD)
