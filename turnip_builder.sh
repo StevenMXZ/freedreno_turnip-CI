@@ -93,63 +93,11 @@ prepare_workdir(){
 
 		cd mesa
 
-		# --- PATCH 1: ADICIONAR SUPORTE EXPERIMENTAL AO A710 ---
-		echo -e "${green}Creating patch for A710 support...${nocolor}"
-		# Usando um 'here document' para criar o arquivo de patch em tempo real
-		cat << 'EOF' > a710_support.patch
-diff -uNr mesa-vulkan-freedreno-25.0.3/src/freedreno/common/freedreno_devices.py mesa-vulkan-freedreno-25.0.3-exp710/src/freedreno/common/freedreno_devices.py
---- mesa-vulkan-freedreno-25.0.3/src/freedreno/common/freedreno_devices.py	2025-04-02 13:35:11.000000000 -0300
-+++ mesa-vulkan-freedreno-25.0.3-exp710/src/freedreno/common/freedreno_devices.py	2025-04-21 20:40:27.570841169 -0300
-@@ -1057,6 +1057,24 @@
-     ))
- 
- add_gpus([
-+        GPUId(chip_id=0x07010000, name="FD710"), # KGSL, no speedbin data
-+        GPUId(chip_id=0xffff07010000, name="FD710"), # Default no-speedbin fallback
-+    ], A6xxGPUInfo(
-+        CHIP.A7XX,
-+        [a7xx_base, a7xx_gen1],
-+        num_ccu = 4,
-+        tile_align_w = 64,
-+        tile_align_h = 32,
-+        num_vsc_pipes = 32,
-+        cs_shared_mem_size = 32 * 1024,
-+        wave_granularity = 2,
-+        fibers_per_sp = 128 * 2 * 16,
-+        highest_bank_bit = 16,
-+        magic_regs = a730_magic_regs,
-+        raw_magic_regs = a730_raw_magic_regs,
-+    ))
-+
-+add_gpus([
-         GPUId(chip_id=0x07030001, name="FD730"), # KGSL, no speedbin data
-         GPUId(chip_id=0xffff07030001, name="FD730"), # Default no-speedbin fallback
-     ], A6xxGPUInfo(
-diff -uNr mesa-vulkan-freedreno-25.0.3/src/freedreno/drm-shim/freedreno_noop.c mesa-vulkan-freedreno-25.0.3-exp710/src/freedreno/drm-shim/freedreno_noop.c
---- mesa-vulkan-freedreno-25.0.3/src/freedreno/drm-shim/freedreno_noop.c	2025-04-02 13:35:11.000000000 -0300
-+++ mesa-vulkan-freedreno-25.0.3-exp710/src/freedreno/drm-shim/freedreno_noop.c	2025-04-21 20:40:28.371145184 -0300
-@@ -235,6 +235,11 @@
-       .gmem_size = 1024 * 1024 + 512 * 1024,
-    },
-    {
-+      .gpu_id = 710,
-+      .chip_id = 0x07010000,
-+      .gmem_size = 2 * 1024 * 1024,
-+   },
-+   {
-       .gpu_id = 730,
-       .chip_id = 0x07030001,
-       .gmem_size = 2 * 1024 * 1024,
-EOF
-		
-		echo -e "${green}Applying A710 support patch...${nocolor}"
-		git apply a710_support.patch
-		echo -e "${green}A710 patch applied successfully!${nocolor}\n"
-		
-		# --- PATCH 2: FORÇAR GMEM ---
-		echo -e "${green}Applying patch: Force GMEM...${nocolor}"
-		sed -i '/bool tu_autotune_use_sysmem(const struct tu_device \*device, const struct tu_render_pass \*pass)/a \    return false;' src/freedreno/vulkan/tu_autotune.cc
-		echo -e "${green}Force GMEM patch applied successfully!${nocolor}"
+		# --- NOVO PATCH: FORÇAR SYSMEM PARA TESTAR ESTABILIDADE NO A619 ---
+		echo -e "${green}Applying patch: Force Sysmem for A619 stability test...${nocolor}"
+		# Este comando insere "return true;" no início da função que decide usar sysmem, forçando esse caminho.
+		sed -i '/bool tu_autotune_use_sysmem(const struct tu_device \*device, const struct tu_render_pass \*pass)/a \    return true;' src/freedreno/vulkan/tu_autotune.cc
+		echo -e "${green}Force Sysmem patch applied successfully!${nocolor}"
 		
 		commit_short=$(git rev-parse --short HEAD)
 		commit=$(git rev-parse HEAD)
