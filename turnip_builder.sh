@@ -89,15 +89,14 @@ prepare_workdir(){
 		fi
 		
 		echo "Cloning mesa ..." $'\n'
-		# Usando --depth=1 de volta, pois não precisamos mais do histórico para reverter
 		git clone --depth=1 "$mesasrc"
 
 		cd mesa
 
-		# NOVA ABORDAGEM: Aplicar patch "Force GMEM" para A710
-		echo -e "${green}Applying patch: Force GMEM for A710...${nocolor}" $'\n'
-		# Este comando encontra a condição para usar sysmem e a substitui por 'if (false)' para forçar o uso de GMEM
-		sed -i 's/if (tu_use_sysmem(pass) || pass->local_nv_ms)/if (false)/' src/freedreno/vulkan/tu_cmd_buffer.cc
+		# ABORDAGEM CORRIGIDA: Forçar GMEM desativando a decisão do Autotuner
+		echo -e "${green}Applying correct patch: Force GMEM by disabling Autotuner...${nocolor}" $'\n'
+		# Este comando insere "return false;" no início da função que decide usar sysmem, forçando GMEM.
+		sed -i '/bool tu_autotune_use_sysmem(const struct tu_device \*device, const struct tu_render_pass \*pass)/a \    return false;' src/freedreno/vulkan/tu_autotune.cc
 		echo -e "${green}Patch applied successfully!${nocolor}"
 		
 		commit_short=$(git rev-parse --short HEAD)
