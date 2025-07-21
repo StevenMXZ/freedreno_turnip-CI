@@ -93,17 +93,18 @@ prepare_workdir(){
 
 		cd mesa
 
-		# --- PATCH 1: ADICIONAR SUPORTE EXPERIMENTAL AO A710 ---
-		echo -e "${green}Creating patch for A710 support...${nocolor}"
-		# Usando um 'here document' para criar o arquivo de patch em tempo real
-		cat << 'EOF' > a710_support.patch
-diff -uNr mesa-vulkan-freedreno-25.0.3/src/freedreno/common/freedreno_devices.py mesa-vulkan-freedreno-25.0.3-exp710/src/freedreno/common/freedreno_devices.py
---- mesa-vulkan-freedreno-25.0.3/src/freedreno/common/freedreno_devices.py	2025-04-02 13:35:11.000000000 -0300
-+++ mesa-vulkan-freedreno-25.0.3-exp710/src/freedreno/common/freedreno_devices.py	2025-04-21 20:40:27.570841169 -0300
-@@ -1057,6 +1057,24 @@
+		# --- NOVO PATCH UNIFICADO ---
+		echo -e "${green}Creating community patch for A710/A720 support + Force GMEM...${nocolor}"
+		cat << 'EOF' > community_patch.patch
+diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
+index 2a821dd822b..527d5fc9e4a 100644
+--- a/src/freedreno/common/freedreno_devices.py
++++ b/src/freedreno/common/freedreno_devices.py
+@@ -1065,6 +1065,42 @@ add_gpus([
+         raw_magic_regs = a730_raw_magic_regs,
      ))
  
- add_gpus([
++add_gpus([
 +        GPUId(chip_id=0x07010000, name="FD710"), # KGSL, no speedbin data
 +        GPUId(chip_id=0xffff07010000, name="FD710"), # Default no-speedbin fallback
 +    ], A6xxGPUInfo(
@@ -122,34 +123,65 @@ diff -uNr mesa-vulkan-freedreno-25.0.3/src/freedreno/common/freedreno_devices.py
 +    ))
 +
 +add_gpus([
++        GPUId(chip_id=0x43020000, name="FD720"), # KGSL, no speedbin data
++        GPUId(chip_id=0xffff043020000, name="FD720"), # Default no-speedbin fallback
++    ], A6xxGPUInfo(
++        CHIP.A7XX,
++        [a7xx_base, a7xx_gen1],
++        num_ccu = 4,
++        tile_align_w = 64,
++        tile_align_h = 32,
++        num_vsc_pipes = 32,
++        cs_shared_mem_size = 32 * 1024,
++        wave_granularity = 2,
++        fibers_per_sp = 128 * 2 * 16,
++        highest_bank_bit = 16,
++        magic_regs = a730_magic_regs,
++        raw_magic_regs = a730_raw_magic_regs,
++    ))
++
+ add_gpus([
          GPUId(chip_id=0x07030001, name="FD730"), # KGSL, no speedbin data
          GPUId(chip_id=0xffff07030001, name="FD730"), # Default no-speedbin fallback
-     ], A6xxGPUInfo(
-diff -uNr mesa-vulkan-freedreno-25.0.3/src/freedreno/drm-shim/freedreno_noop.c mesa-vulkan-freedreno-25.0.3-exp710/src/freedreno/drm-shim/freedreno_noop.c
---- mesa-vulkan-freedreno-25.0.3/src/freedreno/drm-shim/freedreno_noop.c	2025-04-02 13:35:11.000000000 -0300
-+++ mesa-vulkan-freedreno-25.0.3-exp710/src/freedreno/drm-shim/freedreno_noop.c	2025-04-21 20:40:28.371145184 -0300
-@@ -235,6 +235,11 @@
+diff --git a/src/freedreno/drm-shim/freedreno_noop.c b/src/freedreno/drm-shim/freedreno_noop.c
+index 03ab1b675f5..c17c8549cf2 100644
+--- a/src/freedreno/drm-shim/freedreno_noop.c
++++ b/src/freedreno/drm-shim/freedreno_noop.c
+@@ -237,6 +237,16 @@ static const struct msm_device_info device_infos[] = {
+       .chip_id = CHIPID(6, 6, 0, 0xff),
        .gmem_size = 1024 * 1024 + 512 * 1024,
     },
-    {
++   {
 +      .gpu_id = 710,
 +      .chip_id = 0x07010000,
 +      .gmem_size = 2 * 1024 * 1024,
 +   },
 +   {
++      .gpu_id = 720,
++      .chip_id = 0x43020000,
++      .gmem_size = 2 * 1024 * 1024,
++   },
+    {
        .gpu_id = 730,
        .chip_id = 0x07030001,
-       .gmem_size = 2 * 1024 * 1024,
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+index f149b7bc5e9..8a5514d1859 100644
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -1076,7 +1076,7 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
+       return true;
+    }
+ 
+-   if (TU_DEBUG(GMEM))
++
+       return false;
+ 
+    bool use_sysmem = tu_autotune_use_bypass(&cmd->device->autotune,
 EOF
-		
-		echo -e "${green}Applying A710 support patch...${nocolor}"
-		git apply a710_support.patch
-		echo -e "${green}A710 patch applied successfully!${nocolor}\n"
-		
-		# --- PATCH 2: FORÇAR GMEM ---
-		echo -e "${green}Applying patch: Force GMEM...${nocolor}"
-		sed -i '/bool tu_autotune_use_sysmem(const struct tu_device \*device, const struct tu_render_pass \*pass)/a \    return false;' src/freedreno/vulkan/tu_autotune.cc
-		echo -e "${green}Force GMEM patch applied successfully!${nocolor}"
+
+		echo -e "${green}Applying community patch...${nocolor}"
+		git apply community_patch.patch
+		echo -e "${green}Patch applied successfully!${nocolor}\n"
 		
 		commit_short=$(git rev-parse --short HEAD)
 		commit=$(git rev-parse HEAD)
@@ -334,5 +366,3 @@ EOF
 }
 
 run_all
-
-
