@@ -92,13 +92,6 @@ prepare_workdir(){
 		git clone --depth=1 "$mesasrc"
 
 		cd mesa
-
-		# --- NOVO PATCH: FORÇAR SYSMEM PARA TESTAR ESTABILIDADE NO A619 ---
-		echo -e "${green}Applying patch: Force Sysmem for A619 stability test...${nocolor}"
-		# Este comando insere "return true;" no início da função que decide usar sysmem, forçando esse caminho.
-		sed -i '/bool tu_autotune_use_sysmem(const struct tu_device \*device, const struct tu_render_pass \*pass)/a \    return true;' src/freedreno/vulkan/tu_autotune.cc
-		echo -e "${green}Force Sysmem patch applied successfully!${nocolor}"
-		
 		commit_short=$(git rev-parse --short HEAD)
 		commit=$(git rev-parse HEAD)
 		mesa_version=$(cat VERSION | xargs)
@@ -188,19 +181,10 @@ endian = 'little'
 EOF
 
 	echo "Generating build files ..." $'\n'
-	meson setup build-android-aarch64 --cross-file "$workdir"/mesa/android-aarch64 -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir"/meson_log
+	meson setup build-android-aarch64 --cross-file "$workdir"/mesa/android-aarch64 -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled &> "$workdir"/meson_log
 
 	echo "Compiling build files ..." $'\n'
-	ninja -C build-android-aarch64 2>&1 | tee "$workdir"/ninja_log
-
-	local compiled_lib="$workdir/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so"
-	if [ ! -f "$compiled_lib" ]; then
-		echo -e "${red}--------------------------------------------------------------------${nocolor}"
-		echo -e "${red}COMPILATION FAILED: The file libvulkan_freedreno.so was not created.${nocolor}"
-		echo -e "${red}Check the compilation log above for the specific C++ error message.${nocolor}"
-		echo -e "${red}--------------------------------------------------------------------${nocolor}"
-		exit 1
-	fi
+	ninja -C build-android-aarch64 &> "$workdir"/ninja_log
 }
 
 port_lib_for_adrenotool(){
@@ -209,6 +193,10 @@ port_lib_for_adrenotool(){
 	cd "$workdir"
 	patchelf --set-soname vulkan.adreno.so libvulkan_freedreno.so
 	mv libvulkan_freedreno.so vulkan.ad07XX.so
+
+	if ! [ -a vulkan.ad07XX.so ]; then
+		echo -e "$red Build failed! $nocolor" && exit 1
+	fi
 
 	mkdir -p "$packagedir" && cd "$_"
 
