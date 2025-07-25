@@ -92,7 +92,12 @@ prepare_workdir(){
 
 		cd mesa
 
-		# --- NOVA ESTRATÉGIA: MERGE DO MERGE REQUEST ---
+		# --- CORREÇÃO: CONFIGURAR IDENTIDADE LOCAL PARA O GIT ---
+		echo -e "${green}Configuring local git identity for merge...${nocolor}"
+		git config user.name "CI Builder"
+		git config user.email "ci@builder.com"
+		
+		# --- ESTRATÉGIA: MERGE DO MERGE REQUEST ---
 		echo -e "${green}Fetching Merge Request !32671...${nocolor}"
 		# O GitLab expõe os MRs em um 'ref' especial que podemos buscar
 		git fetch origin refs/merge-requests/32671/head
@@ -102,7 +107,7 @@ prepare_workdir(){
 		if git merge --no-edit FETCH_HEAD; then
 			echo -e "${green}Merge successful!${nocolor}\n"
 		else
-			echo -e "${red}Merge failed. There are conflicts that need to be resolved manually.${nocolor}"
+			echo -e "${red}Merge failed. There might be conflicts that need to be resolved manually.${nocolor}"
 			exit 1
 		fi
 		
