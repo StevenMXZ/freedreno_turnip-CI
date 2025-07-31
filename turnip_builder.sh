@@ -9,8 +9,12 @@ workdir="$(pwd)/turnip_workdir"
 magiskdir="$workdir/turnip_module"
 ndkver="android-ndk-r28"
 sdkver="34"
-# ALTERAÇÃO: URL alterada de .zip para o repositório .git para permitir o merge
 mesasrc="https://gitlab.freedesktop.org/mesa/mesa.git"
+
+# Variáveis globais para serem usadas na função de release
+commit=""
+commit_short=""
+mesa_version=""
 
 clear
 
@@ -22,6 +26,7 @@ run_all(){
 	build_lib_for_android
 	port_lib_for_magisk
 	port_lib_for_adrenotools
+	generate_release_info # ADICIONADO: Chamada para a nova função de gerar info da release
 }
 
 check_deps(){
@@ -61,12 +66,10 @@ prepare_workdir(){
 		rm -rf mesa
 	fi
 
-	# ALTERAÇÃO CRÍTICA: Trocado o download do ZIP por 'git clone' para permitir o merge.
 	echo "Cloning mesa source via git..." $'\n'
 	git clone "$mesasrc"
 	cd mesa
 
-	# ADICIONADO: Lógica de merge para o Sparse Residency
 	echo -e "${green}Configuring local git identity for merge...${nocolor}"
 	git config user.name "CI Builder"
 	git config user.email "ci@builder.com"
@@ -81,12 +84,16 @@ prepare_workdir(){
 		echo -e "${red}Merge failed. There might be conflicts that need to be resolved manually.${nocolor}"
 		exit 1
 	fi
+
+	# Preenche as variáveis globais
+	commit_short=$(git rev-parse --short HEAD)
+	commit=$(git rev-parse HEAD)
+	mesa_version=$(cat VERSION)
 }
 
 
 build_lib_for_android(){
 	ndk="$workdir/$ndkver/toolchains/llvm/prebuilt/linux-x86_64/bin"
-	#Workaround for using Clang as c compiler instead of GCC
 	mkdir -p "$workdir/bin"
 	ln -sf "$ndk/clang" "$workdir/bin/cc"
 	ln -sf "$ndk/clang++" "$workdir/bin/c++"
@@ -148,10 +155,8 @@ EOF
 			-Degl=disabled 2>&1 | tee "$workdir/meson_log"
 
 	echo "Compiling build files ..." $'\n'
-		# Usando tee para ver o log em tempo real e salvar em arquivo
 		ninja -C build-android-aarch64 2>&1 | tee "$workdir/ninja_log"
 
-	# ALTERAÇÃO: Caminho corrigido de 'mesa-main' para 'mesa'
 	if ! [ -a "$workdir"/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so ]; then
 		echo -e "$red Build failed! $nocolor" && exit 1
 	fi
@@ -159,7 +164,6 @@ EOF
 
 port_lib_for_magisk(){
 	echo "Using patchelf to match soname ..." $'\n'
-		# ALTERAÇÃO: Caminho corrigido de 'mesa-main' para 'mesa'
 		cp "$workdir"/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so "$workdir"
 		cd "$workdir"
 		patchelf --set-soname vulkan.adreno.so libvulkan_freedreno.so
@@ -193,7 +197,7 @@ EOF
 		cat <<EOF >"module.prop"
 id=turnip_sparse
 name=Turnip with Sparse Residency
-version=$(cat $workdir/mesa/VERSION)-MR32671
+version=${mesa_version}-MR32671
 versionCode=1
 author=MrMiy4mo-CI
 description=Turnip with experimental sparse residency support.
@@ -217,7 +221,6 @@ EOF
 port_lib_for_adrenotools(){
 	libname=vulkan.freedreno.so
 	echo "Using patchelf to match soname for AdrenoTools" $'\n'
-		# ALTERAÇÃO: Caminho corrigido de 'mesa-main' para 'mesa'
 		cp "$workdir"/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so "$workdir"/$libname
 		cd "$workdir"
 		patchelf --set-soname $libname $libname
@@ -230,7 +233,7 @@ port_lib_for_adrenotools(){
 	"author": "MrMiy4mo-CI, kethen",
 	"packageVersion": "1",
 	"vendor": "Mesa",
-	"driverVersion": "$(cat $workdir/mesa/VERSION)-MR32671",
+	"driverVersion": "${mesa_version}-MR32671",
 	"minApi": $sdkver,
 	"libraryName": "$libname"
 }
@@ -241,6 +244,31 @@ EOF
 		then echo -e "$red-Packing turnip_adrenotools.zip failed!$nocolor" && exit 1
 		else echo -e "$green-All done, the AdrenoTools module saved to;$nocolor" && echo "$workdir"/turnip_adrenotools.zip
 	fi
+}
+
+# ADICIONADO: Nova função para gerar os arquivos de texto para a Release do GitHub
+generate_release_info() {
+    echo -e "${green}Generating release info files for GitHub Actions...${nocolor}" $'\n'
+    cd "$workdir" 
+    local date=$(date +'%b %d, %Y')
+    
+    # Cria o arquivo 'tag' que o GitHub Actions precisa
+    echo "${mesa_version}_${commit_short}" > tag
+
+    # Cria o arquivo 'release' (nome da release)
+    echo "Turnip - Mesa ${mesa_version} - ${commit_short}" > release
+
+    # Cria o arquivo 'description' (corpo da release)
+    echo "### Mesa version: ${mesa_version}" > description
+    echo "### Base commit: [${commit_short}](https://gitlab.freedesktop.org/mesa/mesa/-/commit/${commit})" >> description
+    echo "" >> description
+    echo "Experimental build with Merge Request !32671 (Sparse Residency) merged." >> description
+    
+    # Cria os outros arquivos que o log indicou que estavam faltando
+    local filename="turnip_$(date +'%Y-%m-%d')_${commit_short}"
+    echo "$filename" > filename
+    echo "false" > patched
+    echo "false" > experimental
 }
 
 run_all
