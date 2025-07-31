@@ -23,18 +23,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Passo 2: Executa o script de build principal
+      # --- PASSO ADICIONADO ---
+      # Instala as dependências de build Meson e Ninja usando pip (gerenciador de pacotes do Python)
+      - name: Install Build Dependencies
+        run: |
+          pip install meson ninja
+
+      # Passo 3: Executa o script de build principal
       - name: Run Turnip Builder Script
         run: bash ./turnip_builder.sh
 
-      # PASSO 3 (NOVO): LISTAR ARQUIVOS PARA DEPURAÇÃO
-      # Este passo nos mostrará se os arquivos .zip realmente existem.
+      # Passo 4: Listar arquivos para depuração
       - name: List Build Artifacts for Debugging
         run: |
           echo "Listing contents of turnip_workdir to find our zip files..."
           ls -R turnip_workdir
 
-      # Passo 4: Lê os arquivos de informação gerados pelo script
+      # Passo 5: Lê os arquivos de informação gerados pelo script
       - name: Get Release Info
         id: get_info
         run: |
@@ -49,7 +54,7 @@ jobs:
           echo "ZIP_FILES=${zip_files}" >> $GITHUB_OUTPUT
           echo "------------------------------------"
 
-      # Passo 5: Usa uma Ação para criar la Release no GitHub
+      # Passo 6: Usa uma Ação para criar la Release no GitHub
       - name: Create GitHub Release
         id: create_release
         uses: actions/create-release@v1
