@@ -1,68 +1,64 @@
-name: Build "turnip"
+# Nome do Workflow que aparecerá na aba "Actions" do GitHub
+name: Build and Release Turnip Driver
 
+# Define os gatilhos que iniciam o workflow
 on:
+  # Permite que você inicie este workflow manualmente a partir da aba Actions
   workflow_dispatch:
-  schedule:
-  - cron: "20 5 1,15 * *"
 
+  # Também inicia o workflow em cada push para o branch 'main'
+  push:
+    branches:
+      - "main"
+
+# Define os trabalhos (jobs) que o workflow irá executar
 jobs:
-  start_building_turnip:
-    runs-on: ubuntu-24.04
+  build:
+    # O tipo de máquina virtual que o trabalho irá rodar
+    runs-on: ubuntu-latest
+
+    # A sequência de passos que o trabalho executará
     steps:
-    - uses: actions/checkout@v3
+      # Passo 1: Clona o seu repositório para a máquina virtual
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Prepare environment
-      run: |
-        sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
-        sudo apt update
-        sudo apt build-dep mesa -y
-    
-    - name: Execute build script
-      run: bash ./turnip_builder.sh
+      # Passo 2: Executa o script de build principal
+      - name: Run Turnip Builder Script
+        run: bash ./turnip_builder.sh
 
-    - name: Upload a Build Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: Upload meson and ninja logs for debugging
-        path: |
-          turnip_workdir/ninja_log
-          turnip_workdir/mesa/build-android-aarch64/meson-logs/meson-log.txt
-    
-    - id: versions
-      name: "Get release info"
-      run: |
-        echo "name=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
-        echo "tag=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
-        echo "filename=$(cat turnip_workdir/filename)" >> "$GITHUB_OUTPUT"
-        echo "patched=$(cat turnip_workdir/patched)" >> "$GITHUB_OUTPUT"
-        echo "experimental=$(cat turnip_workdir/experimental)" >> "$GITHUB_OUTPUT"
+      # PASSO 3 (NOVO): LISTAR ARQUIVOS PARA DEPURAÇÃO
+      # Este passo nos mostrará se os arquivos .zip realmente existem.
+      - name: List Build Artifacts for Debugging
+        run: |
+          echo "Listing contents of turnip_workdir to find our zip files..."
+          ls -R turnip_workdir
 
-    - name: Release "turnip"
-      uses: softprops/action-gh-release@v1
-      with:
-        body_path: turnip_workdir/description
-        name: ${{ steps.versions.outputs.name }}
-        tag_name: ${{ steps.versions.outputs.tag }}
-        files: |
-           turnip_workdir/${{ steps.versions.outputs.filename }}.zip
+      # Passo 4: Lê os arquivos de informação gerados pelo script
+      - name: Get Release Info
+        id: get_info
+        run: |
+          echo "--- Reading release info files ---"
+          echo "TAG_NAME=$(cat turnip_workdir/tag)" >> $GITHUB_OUTPUT
+          echo "RELEASE_NAME=Release $(cat turnip_workdir/tag)" >> $GITHUB_OUTPUT
+          echo "BODY_PATH=turnip_workdir/description" >> $GITHUB_OUTPUT
+          
+          echo "Searching for zip files in turnip_workdir..."
+          zip_files=$(find turnip_workdir -name '*.zip' | tr '\n' ' ')
+          echo "Found files: [${zip_files}]" # Log para depuração
+          echo "ZIP_FILES=${zip_files}" >> $GITHUB_OUTPUT
+          echo "------------------------------------"
 
-    - name: Release "turnip" with experimental
-      if: ${{ contains(steps.versions.outputs.experimental, 'true') }}
-      uses: softprops/action-gh-release@v1
-      with:
-        body_path: turnip_workdir/description
-        name: ${{ steps.versions.outputs.name }}
-        tag_name: ${{ steps.versions.outputs.tag }}
-        files: |
-           turnip_workdir/${{ steps.versions.outputs.filename }}_experimental.zip
-      
-    - name: Release "turnip" with patched
-      if: ${{ contains(steps.versions.outputs.patched, 'true') }}
-      uses: softprops/action-gh-release@v1
-      with:
-        body_path: turnip_workdir/description
-        name: ${{ steps.versions.outputs.name }}
-        tag_name: ${{ steps.versions.outputs.tag }}
-        files: |
-           turnip_workdir/${{ steps.versions.outputs.filename }}_patched.zip
-           
+      # Passo 5: Usa uma Ação para criar la Release no GitHub
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.get_info.outputs.TAG_NAME }}
+          release_name: ${{ steps.get_info.outputs.RELEASE_NAME }}
+          body_path: ${{ steps.get_info.outputs.BODY_PATH }}
+          files: ${{ steps.get_info.outputs.ZIP_FILES }}
+          draft: true
+          prerelease: false
