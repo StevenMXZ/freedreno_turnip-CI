@@ -22,13 +22,11 @@ jobs:
       # 1. Clona seu repositório para a máquina virtual
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      # 2. Instala dependências essenciais que podem não vir por padrão
+# 2. Instala dependências essenciais
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson ninja-build
-
+          sudo apt-get install -y meson ninja-build glslang-tools
       # 3. Cria o arquivo de cross-compilação do Meson
       - name: Create Meson Cross-File
         run: |
