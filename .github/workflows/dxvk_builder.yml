@@ -1,5 +1,5 @@
 # Nome do Workflow
-name: Build DXVK (Specific Commit) and VKD3D-Proton (x64 & x86)
+name: Build DXVK (Specific Commit) and VKD3D-Proton (x64)
 
 # Gatilhos (Triggers)
 on:
@@ -12,16 +12,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # Prepara o ambiente do workflow
       - name: Checkout workflow repository
         uses: actions/checkout@v4
 
+      # CORREÇÃO APLICADA: Adicionado 'wine64-tools' para obter o 'widl'
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson ninja-build glslang-tools
+          sudo apt-get install -y meson ninja-build glslang-tools wine64-tools
 
-      # 1. Cria os arquivos de cross-compilação para 64 e 32 bits
       - name: Create Meson Cross-Files
         run: |
           # Configuração para 64-bit (x86_64)
@@ -39,7 +38,7 @@ jobs:
           endian = 'little'
           """ > x64_mingw.txt
           
-          # Configuração para 32-bit (i686)
+          # Configuração para 32-bit (i686) - Usada apenas pelo DXVK
           echo """[binaries]
           c = 'i686-w64-mingw32-gcc'
           cpp = 'i686-w64-mingw32-g++'
@@ -54,14 +53,12 @@ jobs:
           endian = 'little'
           """ > x86_mingw.txt
 
-      # 2. Baixa e extrai a toolchain (compilador)
       - name: Download and Extract Toolchain
         run: |
           wget https://github.com/bylaws/llvm-mingw/releases/download/20240929/llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
           tar -xvf llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
           echo "PATH=$(readlink -f llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64/bin):$PATH" >> $GITHUB_ENV
 
-      # 3. Baixa o código-fonte do DXVK usando o método robusto
       - name: Checkout Specific DXVK Commit
         uses: actions/checkout@v4
         with:
@@ -69,9 +66,8 @@ jobs:
           ref: 5c3b5b599f712e3a7bbf0b0d030ff49aa38fa55f
           path: dxvk
           submodules: recursive
-          fetch-depth: 0 # CORREÇÃO DEFINITIVA: Baixa todo o histórico
+          fetch-depth: 0
 
-      # 4. Compila o DXVK (ambas as arquiteturas)
       - name: Build DXVK (x64 & x86)
         run: |
           echo "Building DXVK for x64..."
@@ -82,8 +78,8 @@ jobs:
           meson setup --cross-file x86_mingw.txt --buildtype release --prefix $(pwd)/build_output/x86 build_dxvk_x86 dxvk
           ninja -C build_dxvk_x86 install
 
-      # 5. Compila o VKD3D-Proton (ambas as arquiteturas)
-      - name: Build VKD3D-Proton (x64 & x86)
+      # CORREÇÃO APLICADA: Removida a compilação de 32 bits para o VKD3D
+      - name: Build VKD3D-Proton (x64 only)
         run: |
           echo "Cloning VKD3D-Proton..."
           git clone --recursive https://github.com/HansKristian-Work/vkd3d-proton.git
@@ -91,12 +87,7 @@ jobs:
           echo "Building VKD3D-Proton for x64..."
           meson setup --cross-file x64_mingw.txt --buildtype release --prefix $(pwd)/build_output/x64 build_vkd3d_x64 vkd3d-proton
           ninja -C build_vkd3d_x64 install
-          
-          echo "Building VKD3D-Proton for x86..."
-          meson setup --cross-file x86_mingw.txt --buildtype release --prefix $(pwd)/build_output/x86 build_vkd3d_x86 vkd3d-proton
-          ninja -C build_vkd3d_x86 install
 
-      # 6. Faz o upload dos binários compilados
       - name: Upload Binaries as Artifact
         uses: actions/upload-artifact@v4
         with:
