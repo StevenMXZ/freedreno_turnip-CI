@@ -19,7 +19,7 @@ jobs:
 
     # A sequência de passos que o job vai executar
     steps:
-      # 1. Clona seu repositório para a máquina virtual (necessário para acessar o cross-file)
+      # 1. Clona seu repositório para a máquina virtual
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -52,8 +52,8 @@ jobs:
         run: |
           wget https://github.com/bylaws/llvm-mingw/releases/download/20240929/llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
           tar -xvf llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
-          # Adiciona o caminho da toolchain ao ambiente para os próximos passos
-          echo "$(readlink -f llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64/bin)" >> $GITHUB_ENV
+          # CORREÇÃO APLICADA: Usa o formato "VARIAVEL=valor" para adicionar ao $GITHUB_ENV
+          echo "PATH=$(readlink -f llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64/bin):$PATH" >> $GITHUB_ENV
 
       # 5. Compila o DXVK
       - name: Build DXVK
@@ -67,7 +67,6 @@ jobs:
         run: |
           git clone --recursive https://github.com/HansKristian-Work/vkd3d-proton.git
           cd vkd3d-proton
-          # Submódulos precisam ser iniciados separadamente em alguns casos
           ./setup-test-deps.sh
           cd ..
           meson setup --cross-file $(pwd)/arm64ec_x86.txt --buildtype release --prefix $(pwd)/vkd3d_arm64ec_out/ build_vkd3d_arm64ec vkd3d-proton
