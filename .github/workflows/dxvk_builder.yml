@@ -1,5 +1,5 @@
 # Nome do Workflow
-name: Build Patched ARM64EC & x86 DXVK and VKD3D-Proton
+name: Build ARM64EC & x86 DXVK and VKD3D-Proton
 
 # Gatilhos (Triggers)
 on:
@@ -58,25 +58,19 @@ jobs:
           tar -xvf llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
           echo "PATH=$(readlink -f llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64/bin):$PATH" >> $GITHUB_ENV
 
-      # NOVO PASSO: Baixa o patch do HUD
-      - name: Download HUD Arch Patch
-        run: wget https://raw.githubusercontent.com/m-ab-d/build-dxvk/main/dxvk-hud-arch.patch
-
+      # CORREÇÃO: Removido o passo de baixar o patch que estava falhando
+      
       - name: Checkout LATEST DXVK
         uses: actions/checkout@v4
         with:
           repository: doitsujin/dxvk
           path: dxvk
           submodules: recursive
-          fetch-depth: 0 # Baixa todo o histórico para garantir
+          fetch-depth: 0
 
-      - name: Build Patched DXVK (ARM64EC & x86)
+      - name: Build DXVK (ARM64EC & x86)
         run: |
-          echo "Applying HUD architecture patch..."
-          cd dxvk
-          git apply ../dxvk-hud-arch.patch
-          cd ..
-          
+          # CORREÇÃO: Removida a linha 'git apply' do patch
           echo "Building DXVK for ARM64EC..."
           meson setup --cross-file arm64ec_mingw.txt --buildtype release --prefix $(pwd)/build_output/arm64ec build_dxvk_arm64ec dxvk
           ninja -C build_dxvk_arm64ec install
@@ -101,5 +95,5 @@ jobs:
       - name: Upload Binaries as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: patched-arm64ec-x86-builds
+          name: arm64ec-x86-builds
           path: build_output/
