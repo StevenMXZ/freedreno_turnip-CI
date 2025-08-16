@@ -61,14 +61,11 @@ jobs:
           ninja -C build_dxvk_arm64ec/ install
 
       # 6. Compila o VKD3D-Proton
-      - name: Build VKD3D-Proton
-        run: |
-          git clone --recursive https://github.com/HansKristian-Work/vkd3d-proton.git
-          cd vkd3d-proton
-          ./setup-test-deps.sh
-          cd ..
-          meson setup --cross-file $(pwd)/arm64ec_x86.txt --buildtype release --prefix $(pwd)/vkd3d_arm64ec_out/ build_vkd3d_arm64ec vkd3d-proton
-          ninja -C build_vkd3d_arm64ec/ install
+- name: Build VKD3D-Proton
+  run: |
+    git clone --recursive https://github.com/HansKristian-Work/vkd3d-proton.git
+    meson setup --cross-file $(pwd)/arm64ec_x86.txt --buildtype release --prefix $(pwd)/vkd3d_arm64ec_out/ build_vkd3d_arm64ec vkd3d-proton
+    ninja -C build_vkd3d_arm64ec/ install
 
       # 7. Faz o upload dos binários compilados como um 'artefato'
       - name: Upload Binaries as Artifact
