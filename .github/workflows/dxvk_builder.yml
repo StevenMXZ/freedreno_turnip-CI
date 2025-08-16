@@ -1,5 +1,5 @@
 # Nome do Workflow
-name: Build DXVK (Specific Commit) and VKD3D-Proton (x64)
+name: Build ARM64EC & x86 DXVK and VKD3D-Proton
 
 # Gatilhos (Triggers)
 on:
@@ -15,30 +15,30 @@ jobs:
       - name: Checkout workflow repository
         uses: actions/checkout@v4
 
-      # CORREÇÃO APLICADA: Adicionado 'wine64-tools' para obter o 'widl'
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y meson ninja-build glslang-tools wine64-tools
 
+      # 1. Cria os arquivos de cross-compilação para ARM64EC e 32-bit x86
       - name: Create Meson Cross-Files
         run: |
-          # Configuração para 64-bit (x86_64)
+          # Configuração para ARM64EC (64-bit)
           echo """[binaries]
-          c = 'x86_64-w64-mingw32-gcc'
-          cpp = 'x86_64-w64-mingw32-g++'
-          ar = 'x86_64-w64-mingw32-ar'
-          strip = 'x86_64-w64-mingw32-strip'
-          pkgconfig = 'x86_64-w64-mingw32-pkg-config'
-          windres = 'x86_64-w64-mingw32-windres'
+          c = 'arm64ec-w64-mingw32-gcc'
+          cpp = 'arm64ec-w64-mingw32-g++'
+          ar = 'arm64ec-w64-mingw32-ar'
+          strip = 'arm64ec-w64-mingw32-strip'
+          pkgconfig = 'arm64ec-w64-mingw32-pkg-config'
+          windres = 'arm64ec-w64-mingw32-windres'
           [host_machine]
           system = 'windows'
-          cpu_family = 'x86_64'
-          cpu = 'x86_64'
+          cpu_family = 'aarch64'
+          cpu = 'arm64ec'
           endian = 'little'
-          """ > x64_mingw.txt
+          """ > arm64ec_mingw.txt
           
-          # Configuração para 32-bit (i686) - Usada apenas pelo DXVK
+          # Configuração para 32-bit (i686 / x86)
           echo """[binaries]
           c = 'i686-w64-mingw32-gcc'
           cpp = 'i686-w64-mingw32-g++'
@@ -53,12 +53,14 @@ jobs:
           endian = 'little'
           """ > x86_mingw.txt
 
+      # 2. Baixa e extrai a toolchain (compilador)
       - name: Download and Extract Toolchain
         run: |
           wget https://github.com/bylaws/llvm-mingw/releases/download/20240929/llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
           tar -xvf llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
           echo "PATH=$(readlink -f llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64/bin):$PATH" >> $GITHUB_ENV
 
+      # 3. Baixa o código-fonte do DXVK do commit específico
       - name: Checkout Specific DXVK Commit
         uses: actions/checkout@v4
         with:
@@ -68,28 +70,34 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Build DXVK (x64 & x86)
+      # 4. Compila o DXVK (ARM64EC e x86)
+      - name: Build DXVK (ARM64EC & x86)
         run: |
-          echo "Building DXVK for x64..."
-          meson setup --cross-file x64_mingw.txt --buildtype release --prefix $(pwd)/build_output/x64 build_dxvk_x64 dxvk
-          ninja -C build_dxvk_x64 install
+          echo "Building DXVK for ARM64EC..."
+          meson setup --cross-file arm64ec_mingw.txt --buildtype release --prefix $(pwd)/build_output/arm64ec build_dxvk_arm64ec dxvk
+          ninja -C build_dxvk_arm64ec install
           
           echo "Building DXVK for x86..."
           meson setup --cross-file x86_mingw.txt --buildtype release --prefix $(pwd)/build_output/x86 build_dxvk_x86 dxvk
           ninja -C build_dxvk_x86 install
 
-      # CORREÇÃO APLICADA: Removida a compilação de 32 bits para o VKD3D
-      - name: Build VKD3D-Proton (x64 only)
+      # 5. Compila o VKD3D-Proton (ARM64EC e x86)
+      - name: Build VKD3D-Proton (ARM64EC & x86)
         run: |
           echo "Cloning VKD3D-Proton..."
           git clone --recursive https://github.com/HansKristian-Work/vkd3d-proton.git
           
-          echo "Building VKD3D-Proton for x64..."
-          meson setup --cross-file x64_mingw.txt --buildtype release --prefix $(pwd)/build_output/x64 build_vkd3d_x64 vkd3d-proton
-          ninja -C build_vkd3d_x64 install
+          echo "Building VKD3D-Proton for ARM64EC..."
+          meson setup --cross-file arm64ec_mingw.txt --buildtype release --prefix $(pwd)/build_output/arm64ec build_vkd3d_arm64ec vkd3d-proton
+          ninja -C build_vkd3d_arm64ec install
+          
+          echo "Building VKD3D-Proton for x86..."
+          meson setup --cross-file x86_mingw.txt --buildtype release --prefix $(pwd)/build_output/x86 build_vkd3d_x86 vkd3d-proton
+          ninja -C build_vkd3d_x86 install
 
+      # 6. Faz o upload dos binários compilados
       - name: Upload Binaries as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dxvk-vkd3d-builds
+          name: arm64ec-x86-builds
           path: build_output/
