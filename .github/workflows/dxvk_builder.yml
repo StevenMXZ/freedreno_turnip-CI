@@ -1,5 +1,5 @@
 # Nome do Workflow
-name: Build ARM64EC & x86 DXVK and VKD3D-Proton
+name: Build Patched ARM64EC & x86 DXVK and VKD3D-Proton
 
 # Gatilhos (Triggers)
 on:
@@ -20,7 +20,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y meson ninja-build glslang-tools wine64-tools
 
-      # 1. Cria os arquivos de cross-compilação para ARM64EC e 32-bit x86
       - name: Create Meson Cross-Files
         run: |
           # Configuração para ARM64EC (64-bit)
@@ -53,26 +52,31 @@ jobs:
           endian = 'little'
           """ > x86_mingw.txt
 
-      # 2. Baixa e extrai a toolchain (compilador)
       - name: Download and Extract Toolchain
         run: |
           wget https://github.com/bylaws/llvm-mingw/releases/download/20240929/llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
           tar -xvf llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
           echo "PATH=$(readlink -f llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64/bin):$PATH" >> $GITHUB_ENV
 
-      # 3. Baixa o código-fonte do DXVK do commit específico
-      - name: Checkout Specific DXVK Commit
+      # NOVO PASSO: Baixa o patch do HUD
+      - name: Download HUD Arch Patch
+        run: wget https://raw.githubusercontent.com/m-ab-d/build-dxvk/main/dxvk-hud-arch.patch
+
+      - name: Checkout LATEST DXVK
         uses: actions/checkout@v4
         with:
           repository: doitsujin/dxvk
-          ref: 5c3b5b599f712e3a7bbf0b0d030ff49aa38fa55f
           path: dxvk
           submodules: recursive
-          fetch-depth: 0
+          fetch-depth: 0 # Baixa todo o histórico para garantir
 
-      # 4. Compila o DXVK (ARM64EC e x86)
-      - name: Build DXVK (ARM64EC & x86)
+      - name: Build Patched DXVK (ARM64EC & x86)
         run: |
+          echo "Applying HUD architecture patch..."
+          cd dxvk
+          git apply ../dxvk-hud-arch.patch
+          cd ..
+          
           echo "Building DXVK for ARM64EC..."
           meson setup --cross-file arm64ec_mingw.txt --buildtype release --prefix $(pwd)/build_output/arm64ec build_dxvk_arm64ec dxvk
           ninja -C build_dxvk_arm64ec install
@@ -81,7 +85,6 @@ jobs:
           meson setup --cross-file x86_mingw.txt --buildtype release --prefix $(pwd)/build_output/x86 build_dxvk_x86 dxvk
           ninja -C build_dxvk_x86 install
 
-      # 5. Compila o VKD3D-Proton (ARM64EC e x86)
       - name: Build VKD3D-Proton (ARM64EC & x86)
         run: |
           echo "Cloning VKD3D-Proton..."
@@ -95,9 +98,8 @@ jobs:
           meson setup --cross-file x86_mingw.txt --buildtype release --prefix $(pwd)/build_output/x86 build_vkd3d_x86 vkd3d-proton
           ninja -C build_vkd3d_x86 install
 
-      # 6. Faz o upload dos binários compilados
       - name: Upload Binaries as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: arm64ec-x86-builds
+          name: patched-arm64ec-x86-builds
           path: build_output/
