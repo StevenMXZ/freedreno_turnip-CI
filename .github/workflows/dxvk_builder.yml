@@ -22,11 +22,13 @@ jobs:
       # 1. Clona seu repositório para a máquina virtual
       - name: Checkout repository
         uses: actions/checkout@v4
-# 2. Instala dependências essenciais
+
+      # 2. Instala dependências essenciais
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y meson ninja-build glslang-tools
+
       # 3. Cria o arquivo de cross-compilação do Meson
       - name: Create Meson Cross-File
         run: |
@@ -50,7 +52,6 @@ jobs:
         run: |
           wget https://github.com/bylaws/llvm-mingw/releases/download/20240929/llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
           tar -xvf llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
-          # CORREÇÃO APLICADA: Usa o formato "VARIAVEL=valor" para adicionar ao $GITHUB_ENV
           echo "PATH=$(readlink -f llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64/bin):$PATH" >> $GITHUB_ENV
 
       # 5. Compila o DXVK
@@ -61,11 +62,12 @@ jobs:
           ninja -C build_dxvk_arm64ec/ install
 
       # 6. Compila o VKD3D-Proton
-- name: Build VKD3D-Proton
-  run: |
-    git clone --recursive https://github.com/HansKristian-Work/vkd3d-proton.git
-    meson setup --cross-file $(pwd)/arm64ec_x86.txt --buildtype release --prefix $(pwd)/vkd3d_arm64ec_out/ build_vkd3d_arm64ec vkd3d-proton
-    ninja -C build_vkd3d_arm64ec/ install
+      - name: Build VKD3D-Proton
+        run: |
+          # CORREÇÃO APLICADA AQUI: Removida a chamada ao script inexistente.
+          git clone --recursive https://github.com/HansKristian-Work/vkd3d-proton.git
+          meson setup --cross-file $(pwd)/arm64ec_x86.txt --buildtype release --prefix $(pwd)/vkd3d_arm64ec_out/ build_vkd3d_arm64ec vkd3d-proton
+          ninja -C build_vkd3d_arm64ec/ install
 
       # 7. Faz o upload dos binários compilados como um 'artefato'
       - name: Upload Binaries as Artifact
