@@ -1,5 +1,5 @@
 # Nome do Workflow que aparecerá na aba "Actions" do seu repositório
-name: Build ARM64EC VKD3D and DXVK
+name: Build DXVK (Specific Commit) and VKD3D-Proton (x64 & x86)
 
 # Gatilhos (Triggers): Quando esta Action deve rodar?
 on:
@@ -11,71 +11,96 @@ on:
     branches:
       - main
 
-# Define os 'jobs' (trabalhos) que o workflow vai executar
 jobs:
   build:
-    # O tipo de máquina virtual para rodar o job. 'ubuntu-latest' é x86_64 Linux.
+    # O tipo de máquina virtual para rodar o job
     runs-on: ubuntu-latest
 
     # A sequência de passos que o job vai executar
     steps:
-      # 1. Clona seu repositório para a máquina virtual
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Instala dependências essenciais
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y meson ninja-build glslang-tools
 
-      # 3. Cria o arquivo de cross-compilação do Meson
-      - name: Create Meson Cross-File
+      # 1. Cria os arquivos de cross-compilação para 64 e 32 bits
+      - name: Create Meson Cross-Files
         run: |
+          # Configuração para 64-bit (x86_64)
           echo """[binaries]
-          ar = 'arm64ec-w64-mingw32-ar'
-          c = 'arm64ec-w64-mingw32-gcc'
-          cpp = 'arm64ec-w64-mingw32-g++'
-          ld = 'arm64ec-w64-mingw32-ld'
-          windres = 'arm64ec-w64-mingw32-windres'
-          strip = 'strip'
-          widl = 'arm64ec-w64-mingw32-widl'
-          pkgconfig = 'aarch64-linux-gnu-pkg-config'
+          c = 'x86_64-w64-mingw32-gcc'
+          cpp = 'x86_64-w64-mingw32-g++'
+          ar = 'x86_64-w64-mingw32-ar'
+          strip = 'x86_64-w64-mingw32-strip'
+          pkgconfig = 'x86_64-w64-mingw32-pkg-config'
+          windres = 'x86_64-w64-mingw32-windres'
           [host_machine]
           system = 'windows'
           cpu_family = 'x86_64'
           cpu = 'x86_64'
-          endian = 'little'""" > arm64ec_x86.txt
+          endian = 'little'
+          """ > x64_mingw.txt
+          
+          # Configuração para 32-bit (i686)
+          echo """[binaries]
+          c = 'i686-w64-mingw32-gcc'
+          cpp = 'i686-w64-mingw32-g++'
+          ar = 'i686-w64-mingw32-ar'
+          strip = 'i686-w64-mingw32-strip'
+          pkgconfig = 'i686-w64-mingw32-pkg-config'
+          windres = 'i686-w64-mingw32-windres'
+          [host_machine]
+          system = 'windows'
+          cpu_family = 'x86'
+          cpu = 'i686'
+          endian = 'little'
+          """ > x86_mingw.txt
 
-      # 4. Baixa e extrai a toolchain (compilador)
+      # 2. Baixa e extrai a toolchain (compilador)
       - name: Download and Extract Toolchain
         run: |
           wget https://github.com/bylaws/llvm-mingw/releases/download/20240929/llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
           tar -xvf llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
           echo "PATH=$(readlink -f llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64/bin):$PATH" >> $GITHUB_ENV
 
-      # 5. Compila o DXVK
-      - name: Build DXVK
+      # 3. Compila o DXVK (ambas as arquiteturas) a partir de um commit específico
+      - name: Build DXVK (x64 & x86)
         run: |
-          git clone --recursive https://github.com/doitsujin/dxvk.git
-          meson setup --cross-file $(pwd)/arm64ec_x86.txt --buildtype release --prefix $(pwd)/dxvk_arm64ec_out/ build_dxvk_arm64ec dxvk
-          ninja -C build_dxvk_arm64ec/ install
+          echo "Cloning and checking out specific DXVK commit..."
+          git clone https://github.com/doitsujin/dxvk.git
+          cd dxvk
+          git checkout 5c3b5b599f712e3a7bbf0b0d030ff49aa38fa55f
+          git submodule update --init --recursive
+          cd ..
+          
+          echo "Building DXVK for x64..."
+          meson setup --cross-file x64_mingw.txt --buildtype release --prefix $(pwd)/build_output/x64 build_dxvk_x64 dxvk
+          ninja -C build_dxvk_x64 install
+          
+          echo "Building DXVK for x86..."
+          meson setup --cross-file x86_mingw.txt --buildtype release --prefix $(pwd)/build_output/x86 build_dxvk_x86 dxvk
+          ninja -C build_dxvk_x86 install
 
-      # 6. Compila o VKD3D-Proton
-      - name: Build VKD3D-Proton
+      # 4. Compila o VKD3D-Proton (ambas as arquiteturas)
+      - name: Build VKD3D-Proton (x64 & x86)
         run: |
-          # CORREÇÃO APLICADA AQUI: Removida a chamada ao script inexistente.
+          echo "Cloning VKD3D-Proton..."
           git clone --recursive https://github.com/HansKristian-Work/vkd3d-proton.git
-          meson setup --cross-file $(pwd)/arm64ec_x86.txt --buildtype release --prefix $(pwd)/vkd3d_arm64ec_out/ build_vkd3d_arm64ec vkd3d-proton
-          ninja -C build_vkd3d_arm64ec/ install
+          
+          echo "Building VKD3D-Proton for x64..."
+          meson setup --cross-file x64_mingw.txt --buildtype release --prefix $(pwd)/build_output/x64 build_vkd3d_x64 vkd3d-proton
+          ninja -C build_vkd3d_x64 install
+          
+          echo "Building VKD3D-Proton for x86..."
+          meson setup --cross-file x86_mingw.txt --buildtype release --prefix $(pwd)/build_output/x86 build_vkd3d_x86 vkd3d-proton
+          ninja -C build_vkd3d_x86 install
 
-      # 7. Faz o upload dos binários compilados como um 'artefato'
+      # 5. Faz o upload dos binários compilados como um único 'artefato'
       - name: Upload Binaries as Artifact
         uses: actions/upload-artifact@v4
         with:
-          # Nome do arquivo ZIP que será gerado
-          name: arm64ec-builds
-          # Caminho dos diretórios que serão incluídos no ZIP
-          path: |
-            dxvk_arm64ec_out/
-            vkd3d_arm64ec_out/
+          name: dxvk-vkd3d-builds
+          path: build_output/
