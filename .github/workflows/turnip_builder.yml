@@ -1,72 +1,85 @@
-# Nome do Workflow que aparecerá na aba "Actions" do GitHub
-name: Build and Release Turnip Driver
+# Nome do Workflow que aparecerá na aba "Actions" do seu repositório
+name: Build ARM64EC VKD3D and DXVK
 
-# Define os gatilhos que iniciam o workflow
+# Gatilhos (Triggers): Quando esta Action deve rodar?
 on:
-  # Permite que você inicie este workflow manualmente a partir da aba Actions
+  # Permite que você inicie a Action manualmente pela interface do GitHub
   workflow_dispatch:
 
-  # Também inicia o workflow em cada push para o branch 'main'
+  # Roda automaticamente sempre que você enviar um 'push' para a branch 'main'
   push:
     branches:
-      - "main"
+      - main
 
-# Define os trabalhos (jobs) que o workflow irá executar
+# Define os 'jobs' (trabalhos) que o workflow vai executar
 jobs:
   build:
-    # O tipo de máquina virtual que o trabalho irá rodar
+    # O tipo de máquina virtual para rodar o job. 'ubuntu-latest' é x86_64 Linux.
     runs-on: ubuntu-latest
 
-    # A sequência de passos que o trabalho executará
+    # A sequência de passos que o job vai executar
     steps:
-      # Passo 1: Clona o seu repositório para a máquina virtual
+      # 1. Clona seu repositório para a máquina virtual (necessário para acessar o cross-file)
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Passo 2: Instala todas as dependências de build necessárias
-      - name: Install Build Dependencies
+      # 2. Instala dependências essenciais que podem não vir por padrão
+      - name: Install Dependencies
         run: |
-          # ADICIONADO: Instala o validador de shaders glslang
           sudo apt-get update
-          sudo apt-get install -y glslang-tools
-          # Instala Meson e Ninja via pip
-          pip install meson ninja
+          sudo apt-get install -y meson ninja-build
 
-      # Passo 3: Executa o script de build principal
-      - name: Run Turnip Builder Script
-        run: bash ./turnip_builder.sh
-
-      # Passo 4: Listar arquivos para depuração
-      - name: List Build Artifacts for Debugging
+      # 3. Cria o arquivo de cross-compilação do Meson
+      - name: Create Meson Cross-File
         run: |
-          echo "Listing contents of turnip_workdir to find our zip files..."
-          ls -R turnip_workdir
+          echo """[binaries]
+          ar = 'arm64ec-w64-mingw32-ar'
+          c = 'arm64ec-w64-mingw32-gcc'
+          cpp = 'arm64ec-w64-mingw32-g++'
+          ld = 'arm64ec-w64-mingw32-ld'
+          windres = 'arm64ec-w64-mingw32-windres'
+          strip = 'strip'
+          widl = 'arm64ec-w64-mingw32-widl'
+          pkgconfig = 'aarch64-linux-gnu-pkg-config'
+          [host_machine]
+          system = 'windows'
+          cpu_family = 'x86_64'
+          cpu = 'x86_64'
+          endian = 'little'""" > arm64ec_x86.txt
 
-      # Passo 5: Lê os arquivos de informação gerados pelo script
-      - name: Get Release Info
-        id: get_info
+      # 4. Baixa e extrai a toolchain (compilador)
+      - name: Download and Extract Toolchain
         run: |
-          echo "--- Reading release info files ---"
-          echo "TAG_NAME=$(cat turnip_workdir/tag)" >> $GITHUB_OUTPUT
-          echo "RELEASE_NAME=Release $(cat turnip_workdir/tag)" >> $GITHUB_OUTPUT
-          echo "BODY_PATH=turnip_workdir/description" >> $GITHUB_OUTPUT
-          
-          echo "Searching for zip files in turnip_workdir..."
-          zip_files=$(find turnip_workdir -name '*.zip' | tr '\n' ' ')
-          echo "Found files: [${zip_files}]" # Log para depuração
-          echo "ZIP_FILES=${zip_files}" >> $GITHUB_OUTPUT
-          echo "------------------------------------"
+          wget https://github.com/bylaws/llvm-mingw/releases/download/20240929/llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
+          tar -xvf llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64.tar.xz
+          # Adiciona o caminho da toolchain ao ambiente para os próximos passos
+          echo "$(readlink -f llvm-mingw-20240929-ucrt-ubuntu-20.04-x86_64/bin)" >> $GITHUB_ENV
 
-      # Passo 6: Usa uma Ação para criar la Release no GitHub
-      - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 5. Compila o DXVK
+      - name: Build DXVK
+        run: |
+          git clone --recursive https://github.com/doitsujin/dxvk.git
+          meson setup --cross-file $(pwd)/arm64ec_x86.txt --buildtype release --prefix $(pwd)/dxvk_arm64ec_out/ build_dxvk_arm64ec dxvk
+          ninja -C build_dxvk_arm64ec/ install
+
+      # 6. Compila o VKD3D-Proton
+      - name: Build VKD3D-Proton
+        run: |
+          git clone --recursive https://github.com/HansKristian-Work/vkd3d-proton.git
+          cd vkd3d-proton
+          # Submódulos precisam ser iniciados separadamente em alguns casos
+          ./setup-test-deps.sh
+          cd ..
+          meson setup --cross-file $(pwd)/arm64ec_x86.txt --buildtype release --prefix $(pwd)/vkd3d_arm64ec_out/ build_vkd3d_arm64ec vkd3d-proton
+          ninja -C build_vkd3d_arm64ec/ install
+
+      # 7. Faz o upload dos binários compilados como um 'artefato'
+      - name: Upload Binaries as Artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ steps.get_info.outputs.TAG_NAME }}
-          release_name: ${{ steps.get_info.outputs.RELEASE_NAME }}
-          body_path: ${{ steps.get_info.outputs.BODY_PATH }}
-          files: ${{ steps.get_info.outputs.ZIP_FILES }}
-          draft: true
-          prerelease: false
+          # Nome do arquivo ZIP que será gerado
+          name: arm64ec-builds
+          # Caminho dos diretórios que serão incluídos no ZIP
+          path: |
+            dxvk_arm64ec_out/
+            vkd3d_arm64ec_out/
