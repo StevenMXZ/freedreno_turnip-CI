@@ -69,9 +69,15 @@ jobs:
       # 3. Compila o DXVK (ambas as arquiteturas) a partir de um commit específico
       - name: Build DXVK (x64 & x86)
         run: |
-          echo "Cloning and checking out specific DXVK commit..."
+          echo "Cloning DXVK repository..."
           git clone https://github.com/doitsujin/dxvk.git
           cd dxvk
+          
+          echo "Fetching all history to find the commit..."
+          # CORREÇÃO APLICADA AQUI: Garante que todo o histórico seja baixado
+          git fetch --all --tags --prune
+          
+          echo "Checking out specific DXVK commit..."
           git checkout 5c3b5b599f712e3a7bbf0b0d030ff49aa38fa55f
           git submodule update --init --recursive
           cd ..
