@@ -1,62 +1,67 @@
-# Nome do Workflow que aparecerá na aba "Actions" do GitHub
-name: Build and Release Turnip Driver
+name: Build "turnip"
 
-# Gatilhos que iniciam o workflow
 on:
-  # Permite iniciar manualmente pela aba Actions
   workflow_dispatch:
-  # Aciona a build nos dias 1 e 15 de cada mês
   schedule:
-    - cron: "20 5 1,15 * *"
+  - cron: "20 5 1,15 * *"
 
 jobs:
-  build_and_release:
-    name: Build and Release Turnip
-    runs-on: ubuntu-latest
+  start_building_turnip:
+    runs-on: ubuntu-24.04
     steps:
-      # 1. Faz o checkout do seu código (onde está o turnip_builder.sh)
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v3
 
-      # 2. Prepara o ambiente e instala todas as dependências de build
-      - name: Prepare Build Environment
-        run: |
-          # ADICIONADO DE VOLTA: Comando crucial para habilitar os repositórios de código-fonte (deb-src)
-          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get update
-          # Instala as dependências de build do Mesa de forma eficiente
-          sudo apt-get build-dep mesa -y
-          # Garante que meson e ninja estejam nas versões mais recentes
-          pip install --upgrade meson ninja
+    - name: Prepare environment
+      run: |
+        sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+        sudo apt update
+        sudo apt build-dep mesa -y
+    
+    - name: Execute build script
+      run: bash ./turnip_builder.sh
 
-      # 3. Executa o nosso script de build principal
-      - name: Execute Build Script
-        run: bash ./turnip_builder.sh
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Upload meson and ninja logs for debugging
+        path: |
+          turnip_workdir/ninja_log
+          turnip_workdir/mesa/build-android-aarch64/meson-logs/meson-log.txt
+    
+    - id: versions
+      name: "Get release info"
+      run: |
+        echo "name=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
+        echo "tag=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
+        echo "filename=$(cat turnip_workdir/filename)" >> "$GITHUB_OUTPUT"
+        echo "patched=$(cat turnip_workdir/patched)" >> "$GITHUB_OUTPUT"
+        echo "experimental=$(cat turnip_workdir/experimental)" >> "$GITHUB_OUTPUT"
 
-      # 4. Lê as informações da release geradas pelo script
-      - name: Get Release Info
-        id: get_info
-        run: |
-          echo "RELEASE_NAME=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
-          echo "TAG_NAME=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
+    - name: Release "turnip"
+      uses: softprops/action-gh-release@v1
+      with:
+        body_path: turnip_workdir/description
+        name: ${{ steps.versions.outputs.name }}
+        tag_name: ${{ steps.versions.outputs.tag }}
+        files: |
+           turnip_workdir/${{ steps.versions.outputs.filename }}.zip
 
-      # 5. Anexa os logs da compilação como um artefato para depuração
-      - name: Upload Logs as Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: |
-            turnip_workdir/meson_log
-            turnip_workdir/ninja_log
-
-      # 6. Cria a Release no GitHub com os drivers compilados
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          # Usa as informações lidas do passo anterior
-          tag_name: ${{ steps.get_info.outputs.TAG_NAME }}
-          name: ${{ steps.get_info.outputs.RELEASE_NAME }}
-          body_path: turnip_workdir/description
-          # Usa um curinga para encontrar e anexar TODOS os arquivos .zip
-          files: turnip_workdir/*.zip
-          draft: false # Mude para 'true' se quiser revisar antes de publicar
+    - name: Release "turnip" with experimental
+      if: ${{ contains(steps.versions.outputs.experimental, 'true') }}
+      uses: softprops/action-gh-release@v1
+      with:
+        body_path: turnip_workdir/description
+        name: ${{ steps.versions.outputs.name }}
+        tag_name: ${{ steps.versions.outputs.tag }}
+        files: |
+           turnip_workdir/${{ steps.versions.outputs.filename }}_experimental.zip
+      
+    - name: Release "turnip" with patched
+      if: ${{ contains(steps.versions.outputs.patched, 'true') }}
+      uses: softprops/action-gh-release@v1
+      with:
+        body_path: turnip_workdir/description
+        name: ${{ steps.versions.outputs.name }}
+        tag_name: ${{ steps.versions.outputs.tag }}
+        files: |
+           turnip_workdir/${{ steps.versions.outputs.filename }}_patched.zip
