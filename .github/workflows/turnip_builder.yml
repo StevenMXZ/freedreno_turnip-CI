@@ -1,52 +1,67 @@
-name: Build and Release Turnip
+name: Build "turnip"
 
 on:
-  push:
-    branches:
-      - main  # ou master
-  workflow_dispatch: # permite rodar manualmente
+  workflow_dispatch:
+  schedule:
+  - cron: "20 5 1,15 * *"
 
 jobs:
-  build-and-release:
-    runs-on: ubuntu-latest
+  start_building_turnip:
+    runs-on: ubuntu-24.04
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    - uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
+    - name: Prepare environment
+      run: |
+        sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+        sudo apt update
+        sudo apt build-dep mesa -y
+    
+    - name: Execute build script
+      run: bash ./turnip_builder.sh
 
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y meson ninja-build patchelf unzip curl flex bison zip git ccache
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Upload meson and ninja logs for debugging
+        path: |
+          turnip_workdir/ninja_log
+          turnip_workdir/mesa/build-android-aarch64/meson-logs/meson-log.txt
+    
+    - id: versions
+      name: "Get release info"
+      run: |
+        echo "name=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
+        echo "tag=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
+        echo "filename=$(cat turnip_workdir/filename)" >> "$GITHUB_OUTPUT"
+        echo "patched=$(cat turnip_workdir/patched)" >> "$GITHUB_OUTPUT"
+        echo "experimental=$(cat turnip_workdir/experimental)" >> "$GITHUB_OUTPUT"
 
-      - name: Create release tag if not exists
-        id: tag
-        run: |
-          TAG_NAME="turnip-$(date +'%Y%m%d%H%M')"
-          git fetch --tags
-          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-            echo "Tag $TAG_NAME already exists"
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG_NAME" -m "Automated Turnip release"
-            git push origin "$TAG_NAME"
-          fi
-          echo "tag_name=$TAG_NAME" >> $GITHUB_ENV
+    - name: Release "turnip"
+      uses: softprops/action-gh-release@v1
+      with:
+        body_path: turnip_workdir/description
+        name: ${{ steps.versions.outputs.name }}
+        tag_name: ${{ steps.versions.outputs.tag }}
+        files: |
+           turnip_workdir/${{ steps.versions.outputs.filename }}.zip
 
-      - name: Build Turnip
-        run: |
-          chmod +x build_turnip.sh
-          ./build_turnip.sh
-
-      - name: Upload Release Asset
-        uses: softprops/action-gh-release@v1
-        with:
-          files: turnip_workdir/*.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ env.tag_name }}
+    - name: Release "turnip" with experimental
+      if: ${{ contains(steps.versions.outputs.experimental, 'true') }}
+      uses: softprops/action-gh-release@v1
+      with:
+        body_path: turnip_workdir/description
+        name: ${{ steps.versions.outputs.name }}
+        tag_name: ${{ steps.versions.outputs.tag }}
+        files: |
+           turnip_workdir/${{ steps.versions.outputs.filename }}_experimental.zip
+      
+    - name: Release "turnip" with patched
+      if: ${{ contains(steps.versions.outputs.patched, 'true') }}
+      uses: softprops/action-gh-release@v1
+      with:
+        body_path: turnip_workdir/description
+        name: ${{ steps.versions.outputs.name }}
+        tag_name: ${{ steps.versions.outputs.tag }}
+        files: |
+           turnip_workdir/${{ steps.versions.outputs.filename }}_patched.zip
