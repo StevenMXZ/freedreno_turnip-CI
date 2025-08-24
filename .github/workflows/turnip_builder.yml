@@ -12,7 +12,7 @@ on:
 jobs:
   build_and_release:
     name: Build and Release Turnip
-    runs-on: ubuntu-latest # Usando a versão estável mais recente do Ubuntu
+    runs-on: ubuntu-latest
     steps:
       # 1. Faz o checkout do seu código (onde está o turnip_builder.sh)
       - name: Checkout Repository
@@ -21,6 +21,8 @@ jobs:
       # 2. Prepara o ambiente e instala todas as dependências de build
       - name: Prepare Build Environment
         run: |
+          # ADICIONADO DE VOLTA: Comando crucial para habilitar os repositórios de código-fonte (deb-src)
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update
           # Instala as dependências de build do Mesa de forma eficiente
           sudo apt-get build-dep mesa -y
