@@ -3,7 +3,8 @@ green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
 
-deps="meson ninja patchelf unzip curl pip zip git"
+# --- Config ---
+deps="meson ninja patchelf unzip curl pip zip git gh"
 workdir="$(pwd)/turnip_workdir"
 packagedir="$workdir/turnip_module"
 ndkver="android-ndk-r29"
@@ -16,58 +17,35 @@ mesa_version=""
 vulkan_version=""
 clear
 
-run_all(){
-	check_deps
-	prep
-}
-
-prep () {
-	prepare_workdir
-	build_lib_for_android
-	port_lib_for_adrenotool
-}
-
+# --- Funções ---
 check_deps(){
-	echo "Checking system for required Dependencies ..."
-	for deps_chk in $deps; do
-		sleep 0.25
-		if command -v "$deps_chk" >/dev/null 2>&1 ; then
-			echo -e "$green - $deps_chk found $nocolor"
+	echo "Checking system dependencies ..."
+	for dep in $deps; do
+		if ! command -v $dep >/dev/null 2>&1; then
+			echo -e "$red Missing dependency: $dep$nocolor"
+			missing=1
 		else
-			echo -e "$red - $deps_chk not found, can't continue. $nocolor"
-			deps_missing=1
+			echo -e "$green Found: $dep$nocolor"
 		fi
 	done
-
-	if [ "$deps_missing" == "1" ]; then
+	if [ "$missing" == "1" ]; then
 		echo "Please install missing dependencies" && exit 1
 	fi
 
-	echo "Installing python Mako dependency (if missing) ..." $'\n'
-	pip install mako &> /dev/null
+	# Python Mako
+	pip install mako &> /dev/null || true
 }
 
 prepare_workdir(){
-	echo "Creating and entering work directory ..." $'\n'
-	mkdir -p "$workdir" && cd "$_"
-
-	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
-		if [ ! -n "$(ls -d android-ndk*)" ]; then
-			echo "Downloading android-ndk from Google server (~640 MB) ..." $'\n'
-			curl https://dl.google.com/android/repository/"$ndkver"-linux.zip --output "$ndkver"-linux.zip &> /dev/null
-			echo "Extracting android-ndk to a folder ..." $'\n'
-			unzip "$ndkver"-linux.zip &> /dev/null
-		fi
-	else	
-		echo "Using android NDK from environment"
-	fi
+	echo "Preparing work directory ..."
+	mkdir -p "$workdir" && cd "$workdir"
 
 	if [ -d mesa ]; then
-		echo "Removing old Mesa ..." $'\n'
+		echo "Removing old Mesa ..."
 		rm -rf mesa
 	fi
 
-	echo "Cloning Mesa ..." $'\n'
+	echo "Cloning Mesa ..."
 	git clone --depth=1 "$mesasrc"
 	cd mesa
 
@@ -82,10 +60,10 @@ prepare_workdir(){
 }
 
 build_lib_for_android(){
-	echo "Creating meson cross file ..." $'\n'
+	echo "Creating meson cross file ..."
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		ndk="$workdir/$ndkver/toolchains/llvm/prebuilt/linux-x86_64/bin"
-	else	
+	else
 		ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	fi
 
@@ -105,7 +83,7 @@ cpu = 'armv8'
 endian = 'little'
 EOF
 
-	echo "Generating build files ..." $'\n'
+	echo "Generating build files ..."
 	meson setup build-android-aarch64 --cross-file "$workdir"/mesa/android-aarch64 \
 		-Dplatforms=android \
 		-Dplatform-sdk-version=$sdkver \
@@ -118,50 +96,51 @@ EOF
 		-Dstrip=false \
 		-Degl=disabled &> "$workdir"/meson_log
 
-	echo "Compiling build files ..." $'\n'
+	echo "Compiling ..."
 	ninja -C build-android-aarch64 &> "$workdir"/ninja_log
 }
 
-port_lib_for_adrenotool(){
-	echo "Using patchelf to match soname ..." $'\n'
+package_turnip(){
+	echo "Packaging Turnip ..."
 	cp "$workdir"/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so "$workdir"
 	cd "$workdir"
 	patchelf --set-soname vulkan.adreno.so libvulkan_freedreno.so
 	mv libvulkan_freedreno.so vulkan.ad07XX.so
 
-	if ! [ -a vulkan.ad07XX.so ]; then
-		echo -e "$red Build failed! $nocolor" && exit 1
-	fi
+	mkdir -p "$packagedir" && cd "$packagedir"
+	cp "$workdir"/vulkan.ad07XX.so .
 
-	mkdir -p "$packagedir" && cd "$_"
+	date_str=$(date +'%b-%d-%Y')
+	filename="turnip_${date_str}_$commit_short.zip"
 
-	date=$(date +'%b %d, %Y')
-	cat <<EOF >"meta.json"
-{
-  "schemaVersion": 1,
-  "name": "Turnip - $date - $commit_short",
-  "description": "Compiled from Mesa, Commit $commit_short",
-  "author": "mesa",
-  "packageVersion": "1",
-  "vendor": "Mesa",
-  "driverVersion": "$mesa_version/vk$vulkan_version",
-  "minApi": 27,
-  "libraryName": "vulkan.ad07XX.so"
-}
-EOF
+	zip -9 "$workdir/$filename" ./*
 
-	filename=turnip_"$(date +'%b-%d-%Y')"_"$commit_short"
-	echo "Copy necessary files from work directory ..." $'\n'
-	cp "$workdir"/vulkan.ad07XX.so "$packagedir"
-
-	echo "Packing files into adrenotool package ..." $'\n'
-	zip -9 "$workdir"/"$filename".zip ./*
-
-	if ! [ -a "$workdir"/"$filename".zip ]; then
-		echo -e "$red-Packing failed!$nocolor" && exit 1
+	if ! [ -f "$workdir/$filename" ]; then
+		echo -e "$red Packaging failed! $nocolor" && exit 1
 	else
-		echo -e "$green-All done! Zip available at $workdir/$filename.zip$nocolor"
+		echo -e "$green Package ready: $workdir/$filename $nocolor"
 	fi
 }
 
-run_all
+create_github_release(){
+	echo "Creating GitHub release ..."
+	TAG_NAME="turnip-$commit_short"
+
+	# Cria tag se não existir
+	if ! git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+		git tag -a "$TAG_NAME" -m "Turnip release $TAG_NAME"
+		git push origin "$TAG_NAME"
+	fi
+
+	# Cria release via gh CLI
+	gh release create "$TAG_NAME" "$workdir/$filename" \
+		--title "Turnip $mesa_version - $commit_short" \
+		--notes "Automated Turnip release from Mesa commit $commit_short"
+}
+
+# --- Execução ---
+check_deps
+prepare_workdir
+build_lib_for_android
+package_turnip
+create_github_release
