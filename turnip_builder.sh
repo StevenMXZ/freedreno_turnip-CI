@@ -126,16 +126,22 @@ create_github_release(){
 	echo "Creating GitHub release ..."
 	TAG_NAME="turnip-$commit_short"
 
+	# --- Config Git identity (para GitHub Actions) ---
+	git config user.email "github-actions[bot]@users.noreply.github.com"
+	git config user.name "github-actions[bot]"
+
 	# Cria tag se não existir
 	if ! git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
 		git tag -a "$TAG_NAME" -m "Turnip release $TAG_NAME"
 		git push origin "$TAG_NAME"
 	fi
 
-	# Cria release via gh CLI
+	# Cria release via GitHub CLI
 	gh release create "$TAG_NAME" "$workdir/$filename" \
 		--title "Turnip $mesa_version - $commit_short" \
-		--notes "Automated Turnip release from Mesa commit $commit_short"
+		--notes "Automated Turnip release from Mesa commit $commit_short" \
+		--repo "$GITHUB_REPOSITORY" \
+		--target main
 }
 
 # --- Execução ---
