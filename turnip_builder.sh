@@ -87,27 +87,10 @@ prepare_workdir(){
 		fi
 		
 		echo "Cloning mesa ..." $'\n'
-		# Clonando com histórico completo para garantir que 'git merge' funcione corretamente
-		git clone "$mesasrc"
+		# Fazendo um build limpo do branch main, sem histórico de merge para isolar o problema
+		git clone --depth=1 "$mesasrc"
 
 		cd mesa
-
-		# Configurar identidade local para o Git, necessária para o merge
-		echo -e "${green}Configuring local git identity for merge...${nocolor}"
-		git config user.name "CI Builder"
-		git config user.email "ci@builder.com"
-		
-		# Estratégia de merge do Merge Request para suporte a memória esparsa
-		echo -e "${green}Fetching Merge Request !32671...${nocolor}"
-		git fetch origin refs/merge-requests/32671/head
-
-		echo -e "${green}Merging fetched MR into current branch...${nocolor}"
-		if git merge --no-edit FETCH_HEAD; then
-			echo -e "${green}Merge successful!${nocolor}\n"
-		else
-			echo -e "${red}Merge failed. There might be conflicts that need to be resolved manually.${nocolor}"
-			exit 1
-		fi
 		
 		commit_short=$(git rev-parse --short HEAD)
 		commit=$(git rev-parse HEAD)
@@ -199,7 +182,6 @@ EOF
 
 	echo "Generating build files ..." $'\n'
 	cd "$workdir/mesa"
-	# COMANDO MESON ATUALIZADO COM -Dstrip=false
 	meson setup build-android-aarch64 \
 		--cross-file "android-aarch64" \
 		-Dbuildtype=release \
@@ -277,10 +259,20 @@ EOF
 	else		
 		if [ $1 == "patched" ]; then 
 			echo "## Upstreams / Patches" >> description
-			# ... (lógica de patches que não estamos usando)
+			echo "These have not been merged by Mesa officially yet and may introduce bugs or" >> description
+			echo "we revert stuff that breaks games but still got merged in (see --reverse)" >> description
+			patch_to_description ${base_patches[@]}
+			echo "true" > patched
+			echo "" >> description
+			echo "_Upstreams / Patches are only applied to the patched version (\_patched.zip)_" >> description
+			echo "_If a patch is not present anymore, it's most likely because it got merged, is not needed anymore or was breaking something._" >> description
 		else 
 			echo "### Upstreams / Patches (Experimental)" >> description
-			# ... (lógica de patches que não estamos usando)
+			echo "Include previously listed patches + experimental ones" >> description
+			patch_to_description ${experimental_patches[@]}
+			echo "true" > experimental
+			echo "" >> description
+			echo "_Experimental patches are only applied to the experimental version (\_experimental.zip)_" >> description
 		fi
 	fi
 
