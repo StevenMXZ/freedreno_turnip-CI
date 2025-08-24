@@ -87,8 +87,8 @@ prepare_workdir(){
 		fi
 		
 		echo "Cloning mesa ..." $'\n'
-		# Fazendo um build limpo do branch main, sem histórico de merge para isolar o problema
-		git clone --depth=1 "$mesasrc"
+		# Fazendo clone completo para garantir que todas as dependências do build sejam encontradas
+		git clone "$mesasrc"
 
 		cd mesa
 		
@@ -159,7 +159,7 @@ patch_to_description() {
 build_lib_for_android(){
 	echo "Creating meson cross file ..." $'\n'
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
-		ndk="$workdir/$ndkver/toolchains/llvm/prebuilt/linux-x88_64/bin"
+		ndk="$workdir/$ndkver/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	else	
 		ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	fi
@@ -172,7 +172,8 @@ cpp = ['ccache', '$ndk/aarch64-linux-android$sdkver-clang++', '-fno-exceptions',
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk/aarch64-linux-android-strip'
-pkg-config = ['env', 'PKG_CONFIG_LIBDIR=NDKDIR/pkgconfig', '/usr/bin/pkg-config']
+# CORREÇÃO: "pkgconfig" alterado para "pkg-config" e caminho corrigido para a variável $ndk
+pkg-config = ['env', 'PKG_CONFIG_LIBDIR=$ndk/pkg-config', '/usr/bin/pkg-config']
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
