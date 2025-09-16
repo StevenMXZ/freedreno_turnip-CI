@@ -83,6 +83,8 @@ prepare_workdir(){
 		
 		echo "Cloning mesa ..." $'\n'
 		git clone "$mesasrc"
+  
+  sed -i 's/cc.find_library('"'"'rt'"'"', required : true)/cc.find_library('"'"'rt'"'"', required : false)/' meson.build
 
 		cd mesa
 		
