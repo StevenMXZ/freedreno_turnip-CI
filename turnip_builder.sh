@@ -7,7 +7,6 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 packagedir="$workdir/turnip_module"
 ndkver="android-ndk-r29"
-# ALTERADO: SDK version atualizada para 35
 sdkver="35"
 mesasrc="https://gitlab.freedesktop.org/mesa/mesa.git"
 
@@ -40,39 +39,38 @@ prep () {
 }
 
 check_deps(){
-	echo "Checking system for required Dependencies ..."
-	for deps_chk in $deps;
-		do
-			sleep 0.25
-			if command -v "$deps_chk" >/dev/null 2>&1 ; then
-				echo -e "$green - $deps_chk found $nocolor"
-			else
-				echo -e "$red - $deps_chk not found, can't continue. $nocolor"
-				deps_missing=1
-			fi;
-		done
-
-		if [ "$deps_missing" == "1" ]
-			then echo "Please install missing dependencies" && exit 1
+	echo "Checking system for required dependencies ..."
+	for deps_chk in $deps; do
+		sleep 0.25
+		if command -v "$deps_chk" >/dev/null 2>&1 ; then
+			echo -e "$green - $deps_chk found $nocolor"
+		else
+			echo -e "$red - $deps_chk not found, can't continue. $nocolor"
+			deps_missing=1
 		fi
+	done
+
+	if [ "$deps_missing" == "1" ]; then
+		echo "Please install missing dependencies" && exit 1
+	fi
 
 	echo "Installing python Mako dependency (if missing) ..." $'\n'
 	pip install mako &> /dev/null
 }
 
 prepare_workdir(){
-	echo "Creating and entering to work directory ..." $'\n'
+	echo "Creating and entering work directory ..." $'\n'
 	mkdir -p "$workdir" && cd "$_"
 
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		if [ ! -n "$(ls -d android-ndk*)" ]; then
-			echo "Downloading android-ndk from google server (~640 MB) ..." $'\n'
+			echo "Downloading android-ndk from Google server (~640 MB) ..." $'\n'
 			curl https://dl.google.com/android/repository/"$ndkver"-linux.zip --output "$ndkver"-linux.zip &> /dev/null
-			echo "Exracting android-ndk to a folder ..." $'\n'
-			unzip "$ndkver"-linux.zip  &> /dev/null
+			echo "Extracting android-ndk to a folder ..." $'\n'
+			unzip "$ndkver"-linux.zip &> /dev/null
 		fi
 	else	
-		echo "Using android ndk from github image"
+		echo "Using android ndk from environment"
 	fi
 
 	if [ -z "$1" ]; then
@@ -83,11 +81,12 @@ prepare_workdir(){
 		
 		echo "Cloning mesa ..." $'\n'
 		git clone "$mesasrc"
-  
-  sed -i 's/cc.find_library('"'"'rt'"'"', required : true)/cc.find_library('"'"'rt'"'"', required : false)/' meson.build
-
 		cd mesa
-		
+
+		# 🔧 Ajuste automático para Android: tornar librt opcional
+		echo "Patching meson.build files to ignore librt on Android ..." $'\n'
+		find . -type f -name "meson.build" -exec sed -i "s/cc.find_library('rt'.*)/cc.find_library('rt', required : false)/" {} +
+
 		commit_short=$(git rev-parse --short HEAD)
 		commit=$(git rev-parse HEAD)
 		mesa_version=$(cat VERSION | xargs)
@@ -240,7 +239,7 @@ EOF
 	echo "Copy necessary files from work directory ..." $'\n'
 	cp "$workdir"/vulkan.ad07XX.so "$packagedir"
 
-	echo "Packing files in to adrenotool package ..." $'\n'
+	echo "Packing files into adrenotool package ..." $'\n'
 	cd "$packagedir"
 	zip -9 "$workdir"/"$filename$suffix".zip ./*
 
@@ -279,9 +278,10 @@ EOF
 		patch_to_description ${failed_patches[@]}
 	fi
 	
-	if ! [ -a "$workdir"/"$filename$suffix".zip ];
-		then echo -e "$red-Packing failed!$nocolor" && exit 1
-		else echo -e "$green-All done, you can take your zip from this folder;$nocolor" && echo "$workdir"/
+	if ! [ -a "$workdir"/"$filename$suffix".zip ]; then
+		echo -e "$red-Packing failed!$nocolor" && exit 1
+	else
+		echo -e "$green-All done, you can take your zip from this folder;$nocolor" && echo "$workdir"/
 	fi
 }
 
