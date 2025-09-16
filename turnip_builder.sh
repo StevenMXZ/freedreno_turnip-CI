@@ -148,23 +148,28 @@ patch_to_description() {
 
 build_lib_for_android(){
 	echo "Creating meson cross file ..." $'\n'
+	local ndk_root_path
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
-		ndk="$workdir/$ndkver/toolchains/llvm/prebuilt/linux-x86_64/bin"
+		ndk_root_path="$workdir/$ndkver"
 	else	
-		ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
 	fi
+
+	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
+	# ADICIONADO: Caminho para a sysroot do NDK, onde as bibliotecas como a librt estão.
+	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+	local ndk_lib_path="$ndk_sysroot_path/usr/lib/aarch64-linux-android/$sdkver"
 
 	cat <<EOF >"$workdir/mesa/android-aarch64"
 [binaries]
-ar = '$ndk/llvm-ar'
-# ADICIONADO: -Dandroid-strict=false passado diretamente para o compilador C
-c = ['ccache', '$ndk/aarch64-linux-android$sdkver-clang', '-Dandroid-strict=false']
-# ADICIONADO: -Dandroid-strict=false passado diretamente para o compilador C++
-cpp = ['ccache', '$ndk/aarch64-linux-android$sdkver-clang++', '-Dandroid-strict=false', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+ar = '$ndk_bin_path/llvm-ar'
+# ADICIONADO: Flags do linker (-L e -lrt) para encontrar e linkar a biblioteca 'rt'
+c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '-Dandroid-strict=false', '-L$ndk_lib_path', '-lrt']
+cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '-Dandroid-strict=false', '-L$ndk_lib_path', '-lrt', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
 cpp_ld = 'lld'
-strip = '$ndk/aarch64-linux-android-strip'
-pkg-config = ['env', 'PKG_CONFIG_LIBDIR=$ndk/pkg-config', '/usr/bin/pkg-config']
+strip = '$ndk_bin_path/aarch64-linux-android-strip'
+pkg-config = ['env', 'PKG_CONFIG_LIBDIR=$ndk_bin_path/pkg-config', '/usr/bin/pkg-config']
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
