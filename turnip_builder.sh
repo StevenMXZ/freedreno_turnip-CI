@@ -157,8 +157,10 @@ build_lib_for_android(){
 	cat <<EOF >"$workdir/mesa/android-aarch64"
 [binaries]
 ar = '$ndk/llvm-ar'
-c = ['ccache', '$ndk/aarch64-linux-android$sdkver-clang']
-cpp = ['ccache', '$ndk/aarch64-linux-android$sdkver-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+# ADICIONADO: -Dandroid-strict=false passado diretamente para o compilador C
+c = ['ccache', '$ndk/aarch64-linux-android$sdkver-clang', '-Dandroid-strict=false']
+# ADICIONADO: -Dandroid-strict=false passado diretamente para o compilador C++
+cpp = ['ccache', '$ndk/aarch64-linux-android$sdkver-clang++', '-Dandroid-strict=false', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk/aarch64-linux-android-strip'
