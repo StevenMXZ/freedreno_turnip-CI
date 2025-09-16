@@ -156,16 +156,15 @@ build_lib_for_android(){
 	fi
 
 	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
-	# ADICIONADO: Caminho para a sysroot do NDK, onde as bibliotecas como a librt estão.
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 	local ndk_lib_path="$ndk_sysroot_path/usr/lib/aarch64-linux-android/$sdkver"
 
 	cat <<EOF >"$workdir/mesa/android-aarch64"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
-# ADICIONADO: Flags do linker (-L e -lrt) para encontrar e linkar a biblioteca 'rt'
-c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '-Dandroid-strict=false', '-L$ndk_lib_path', '-lrt']
-cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '-Dandroid-strict=false', '-L$ndk_lib_path', '-lrt', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+# ADICIONADO: Flag -ldl para encontrar e linkar a biblioteca 'dl'
+c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '-Dandroid-strict=false', '-L$ndk_lib_path', '-lrt', '-ldl']
+cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '-Dandroid-strict=false', '-L$ndk_lib_path', '-lrt', '-ldl', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk_bin_path/aarch64-linux-android-strip'
