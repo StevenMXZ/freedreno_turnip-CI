@@ -7,6 +7,7 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 packagedir="$workdir/turnip_module"
 ndkver="android-ndk-r29"
+# ALTERADO: SDK version atualizada para 35
 sdkver="35"
 mesasrc="https://gitlab.freedesktop.org/mesa/mesa.git"
 
@@ -157,14 +158,12 @@ build_lib_for_android(){
 
 	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-	local ndk_lib_path="$ndk_sysroot_path/usr/lib/aarch64-linux-android/$sdkver"
 
 	cat <<EOF >"$workdir/mesa/android-aarch64"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
-# ADICIONADO: Flag -ldl para encontrar e linkar a biblioteca 'dl'
-c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '-Dandroid-strict=false', '-L$ndk_lib_path', '-lrt', '-ldl']
-cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '-Dandroid-strict=false', '-L$ndk_lib_path', '-lrt', '-ldl', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path', '-Dandroid-strict=false']
+cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-Dandroid-strict=false', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk_bin_path/aarch64-linux-android-strip'
