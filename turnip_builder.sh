@@ -7,7 +7,7 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 packagedir="$workdir/turnip_module"
 ndkver="android-ndk-r29"
-sdkver="34"
+sdkver="35"
 mesasrc="https://gitlab.freedesktop.org/mesa/mesa.git"
 
 base_patches=()
@@ -174,7 +174,7 @@ EOF
 	cd "$workdir/mesa"
 	meson setup build-android-aarch64 \
 		--cross-file "android-aarch64" \
-		-Dbuildtype=debug \
+		-Dbuildtype=release \
 		-Dplatforms=android \
 		-Dplatform-sdk-version=$sdkver \
 		-Dandroid-stub=true \
