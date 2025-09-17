@@ -7,7 +7,7 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 packagedir="$workdir/turnip_module"
 ndkver="android-ndk-r29"
-sdkver="36"
+sdkver="33"
 mesasrc="https://gitlab.freedesktop.org/mesa/mesa.git"
 
 base_patches=()
@@ -39,38 +39,39 @@ prep () {
 }
 
 check_deps(){
-	echo "Checking system for required dependencies ..."
-	for deps_chk in $deps; do
-		sleep 0.25
-		if command -v "$deps_chk" >/dev/null 2>&1 ; then
-			echo -e "$green - $deps_chk found $nocolor"
-		else
-			echo -e "$red - $deps_chk not found, can't continue. $nocolor"
-			deps_missing=1
-		fi
-	done
+	echo "Checking system for required Dependencies ..."
+	for deps_chk in $deps;
+		do
+			sleep 0.25
+			if command -v "$deps_chk" >/dev/null 2>&1 ; then
+				echo -e "$green - $deps_chk found $nocolor"
+			else
+				echo -e "$red - $deps_chk not found, can't continue. $nocolor"
+				deps_missing=1
+			fi;
+		done
 
-	if [ "$deps_missing" == "1" ]; then
-		echo "Please install missing dependencies" && exit 1
-	fi
+		if [ "$deps_missing" == "1" ]
+			then echo "Please install missing dependencies" && exit 1
+		fi
 
 	echo "Installing python Mako dependency (if missing) ..." $'\n'
 	pip install mako &> /dev/null
 }
 
 prepare_workdir(){
-	echo "Creating and entering work directory ..." $'\n'
+	echo "Creating and entering to work directory ..." $'\n'
 	mkdir -p "$workdir" && cd "$_"
 
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		if [ ! -n "$(ls -d android-ndk*)" ]; then
-			echo "Downloading android-ndk from Google server (~640 MB) ..." $'\n'
+			echo "Downloading android-ndk from google server (~640 MB) ..." $'\n'
 			curl https://dl.google.com/android/repository/"$ndkver"-linux.zip --output "$ndkver"-linux.zip &> /dev/null
-			echo "Extracting android-ndk to a folder ..." $'\n'
-			unzip "$ndkver"-linux.zip &> /dev/null
+			echo "Exracting android-ndk to a folder ..." $'\n'
+			unzip "$ndkver"-linux.zip  &> /dev/null
 		fi
 	else	
-		echo "Using android ndk from environment"
+		echo "Using android ndk from github image"
 	fi
 
 	if [ -z "$1" ]; then
@@ -81,12 +82,9 @@ prepare_workdir(){
 		
 		echo "Cloning mesa ..." $'\n'
 		git clone "$mesasrc"
+
 		cd mesa
-
-		# 🔧 Ajuste automático para Android: tornar librt opcional
-		echo "Patching meson.build files to ignore librt on Android ..." $'\n'
-		find . -type f -name "meson.build" -exec sed -i "s/cc.find_library('rt'.*)/cc.find_library('rt', required : false)/" {} +
-
+		
 		commit_short=$(git rev-parse --short HEAD)
 		commit=$(git rev-parse HEAD)
 		mesa_version=$(cat VERSION | xargs)
@@ -150,25 +148,21 @@ patch_to_description() {
 
 build_lib_for_android(){
 	echo "Creating meson cross file ..." $'\n'
-	local ndk_root_path
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
-		ndk_root_path="$workdir/$ndkver"
+		ndk="$workdir/$ndkver/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	else	
-		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
+		ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	fi
-
-	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
-	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
 	cat <<EOF >"$workdir/mesa/android-aarch64"
 [binaries]
-ar = '$ndk_bin_path/llvm-ar'
-c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path', '-Wno-error=availability']
-cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-Wno-error=availability', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+ar = '$ndk/llvm-ar'
+c = ['ccache', '$ndk/aarch64-linux-android$sdkver-clang']
+cpp = ['ccache', '$ndk/aarch64-linux-android$sdkver-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
 cpp_ld = 'lld'
-strip = '$ndk_bin_path/aarch64-linux-android-strip'
-pkg-config = ['env', 'PKG_CONFIG_LIBDIR=$ndk_bin_path/pkg-config', '/usr/bin/pkg-config']
+strip = '$ndk/aarch64-linux-android-strip'
+pkg-config = ['env', 'PKG_CONFIG_LIBDIR=$ndk/pkg-config', '/usr/bin/pkg-config']
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
@@ -180,7 +174,7 @@ EOF
 	cd "$workdir/mesa"
 	meson setup build-android-aarch64 \
 		--cross-file "android-aarch64" \
-		-Dbuildtype=release \
+		-Dbuildtype=debug \
 		-Dplatforms=android \
 		-Dplatform-sdk-version=$sdkver \
 		-Dandroid-stub=true \
@@ -239,7 +233,7 @@ EOF
 	echo "Copy necessary files from work directory ..." $'\n'
 	cp "$workdir"/vulkan.ad07XX.so "$packagedir"
 
-	echo "Packing files into adrenotool package ..." $'\n'
+	echo "Packing files in to adrenotool package ..." $'\n'
 	cd "$packagedir"
 	zip -9 "$workdir"/"$filename$suffix".zip ./*
 
@@ -278,10 +272,9 @@ EOF
 		patch_to_description ${failed_patches[@]}
 	fi
 	
-	if ! [ -a "$workdir"/"$filename$suffix".zip ]; then
-		echo -e "$red-Packing failed!$nocolor" && exit 1
-	else
-		echo -e "$green-All done, you can take your zip from this folder;$nocolor" && echo "$workdir"/
+	if ! [ -a "$workdir"/"$filename$suffix".zip ];
+		then echo -e "$red-Packing failed!$nocolor" && exit 1
+		else echo -e "$green-All done, you can take your zip from this folder;$nocolor" && echo "$workdir"/
 	fi
 }
 
