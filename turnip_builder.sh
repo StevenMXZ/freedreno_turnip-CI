@@ -8,28 +8,23 @@ workdir="$(pwd)/turnip_workdir"
 packagedir="$workdir/turnip_module"
 ndkver="android-ndk-r29"
 sdkver="35"
-# ALTERADO: URL do repositório para o fork do Danil
 mesasrc="https://gitlab.freedesktop.org/Danil/mesa.git"
 
-# As arrays de patches foram esvaziadas, pois não serão mais usadas
 base_patches=()
 experimental_patches=()
 failed_patches=()
-
 commit=""
 commit_short=""
 mesa_version=""
 vulkan_version=""
 clear
 
-# ALTERADO: A função run_all foi simplificada para fazer apenas um build
 run_all(){
 	check_deps
 	prep
 }
 
 prep () {
-	# O argumento $1 foi removido pois não há mais builds com sufixo
 	prepare_workdir
 	build_lib_for_android
 	port_lib_for_adrenotool
@@ -77,12 +72,10 @@ prepare_workdir(){
 	fi
 	
 	echo "Cloning mesa from Danil's fork..." $'\n'
-	# Removido --depth=1 para garantir que o checkout do branch funcione
 	git clone "$mesasrc"
 
 	cd mesa
 	
-	# ADICIONADO: Checkout para o branch específico 'tu-newat-fixes'
 	echo -e "${green}Switching to branch 'tu-newat-fixes'...${nocolor}"
 	git checkout tu-newat-fixes
 
@@ -110,8 +103,9 @@ build_lib_for_android(){
 	cat <<EOF >"$workdir/mesa/android-aarch64"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
-c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path', '-Dandroid-strict=false']
-cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-Dandroid-strict=false', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+# REMOVIDO: A flag -Dandroid-strict=false foi retirada
+c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
+cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk_bin_path/aarch64-linux-android-strip'
@@ -132,15 +126,17 @@ EOF
 }
 
 port_lib_for_adrenotool(){
+	local compiled_lib="$workdir/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so"
+	if [ ! -f "$compiled_lib" ]; then
+		echo -e "${red}Build failed: libvulkan_freedreno.so not found. Check compilation logs.${nocolor}"
+		exit 1
+	fi
+	
 	echo "Using patchelf to match soname ..."  $'\n'
-	cp "$workdir"/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so "$workdir"
+	cp "$compiled_lib" "$workdir"
 	cd "$workdir"
 	patchelf --set-soname vulkan.adreno.so libvulkan_freedreno.so
 	mv libvulkan_freedreno.so vulkan.ad07XX.so
-
-	if ! [ -a vulkan.ad07XX.so ]; then
-		echo -e "$red Build failed! $nocolor" && exit 1
-	fi
 
 	mkdir -p "$packagedir" && cd "$_"
 
@@ -170,11 +166,9 @@ EOF
 
 	cd "$workdir"
 
-	# Lógica simplificada para gerar arquivos de release
 	echo "Turnip - $mesa_version - $date" > release
 	echo "${mesa_version}_${commit_short}" > tag
 	echo  $filename > filename
-	# Link do commit atualizado para o fork do Danil
 	echo "### Build from Danil's fork (tu-newat-fixes)" > description
 	echo "### Base commit: [$commit_short](https://gitlab.freedesktop.org/Danil/mesa/-/commit/$commit)" >> description
 	
