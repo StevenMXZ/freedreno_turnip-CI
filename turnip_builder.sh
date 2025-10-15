@@ -11,32 +11,28 @@ sdkver="35"
 # ALTERADO: URL do repositório para o fork do Danil
 mesasrc="https://gitlab.freedesktop.org/Danil/mesa.git"
 
+# As arrays de patches foram esvaziadas, pois não serão mais usadas
 base_patches=()
 experimental_patches=()
 failed_patches=()
+
 commit=""
 commit_short=""
 mesa_version=""
 vulkan_version=""
 clear
 
+# ALTERADO: A função run_all foi simplificada para fazer apenas um build
 run_all(){
 	check_deps
 	prep
-
-	if (( ${#base_patches[@]} )); then
-		prep "patched"
-	fi
- 
-	if (( ${#experimental_patches[@]} )); then
-		prep "experimental"
-	fi
 }
 
 prep () {
-	prepare_workdir "$1"
+	# O argumento $1 foi removido pois não há mais builds com sufixo
+	prepare_workdir
 	build_lib_for_android
-	port_lib_for_adrenotool "$1"
+	port_lib_for_adrenotool
 }
 
 check_deps(){
@@ -65,7 +61,7 @@ prepare_workdir(){
 	mkdir -p "$workdir" && cd "$_"
 
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
-		if [ ! -n "$(ls -d android-ndk*)" ]; then
+		if [ ! -d "$ndkver" ]; then
 			echo "Downloading android-ndk from google server (~640 MB) ..." $'\n'
 			curl https://dl.google.com/android/repository/"$ndkver"-linux.zip --output "$ndkver"-linux.zip &> /dev/null
 			echo "Exracting android-ndk to a folder ..." $'\n'
@@ -75,94 +71,42 @@ prepare_workdir(){
 		echo "Using android ndk from github image"
 	fi
 
-	if [ -z "$1" ]; then
-		if [ -d mesa ]; then
-			echo "Removing old mesa ..." $'\n'
-			rm -rf mesa
-		fi
-		
-		echo "Cloning mesa from Danil's fork..." $'\n'
-		git clone "$mesasrc"
-
-		cd mesa
-		
-		# ADICIONADO: Checkout para o branch específico
-		echo -e "${green}Switching to branch 'tu-newat-fixes'...${nocolor}"
-		git checkout tu-newat-fixes
-		
-		commit_short=$(git rev-parse --short HEAD)
-		commit=$(git rev-parse HEAD)
-		mesa_version=$(cat VERSION | xargs)
-		version=$(awk -F'COMPLETE VK_MAKE_API_VERSION(|)' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
-		major=$(echo $version | cut -d "," -f 2 | xargs)
-		minor=$(echo $version | cut -d "," -f 3 | xargs)
-		patch=$(awk -F'VK_HEADER_VERSION |\n#define' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
-		vulkan_version="$major.$minor.$patch"
-	else		
-		cd mesa
-
-		if [ $1 == "patched" ]; then 
-			apply_patches ${base_patches[@]}
-		else 
-			apply_patches ${experimental_patches[@]}
-		fi
+	if [ -d mesa ]; then
+		echo "Removing old mesa ..." $'\n'
+		rm -rf mesa
 	fi
-}
+	
+	echo "Cloning mesa from Danil's fork..." $'\n'
+	# Removido --depth=1 para garantir que o checkout do branch funcione
+	git clone "$mesasrc"
 
-apply_patches() {
-	local arr=("$@")
-	for patch in "${arr[@]}"; do
-		echo "Applying patch $patch"
-		patch_source="$(echo $patch | cut -d ";" -f 2 | xargs)"
-		patch_args=$(echo $patch | cut -d ";" -f 3 | xargs)
-		if [[ $patch_source == *"../.."* ]]; then
-			if git apply $patch_args "$patch_source"; then
-				echo "Patch applied successfully"
-			else
-				echo "Failed to apply $patch"
-				failed_patches+=("$patch")
-			fi
-		else 
-			patch_file="${patch_source#*\/}"
-			curl --output "../$patch_file".patch -k --retry-delay 30 --retry 5 -f --retry-all-errors https://gitlab.freedesktop.org/mesa/mesa/-/"$patch_source".patch
-			sleep 1
+	cd mesa
+	
+	# ADICIONADO: Checkout para o branch específico 'tu-newat-fixes'
+	echo -e "${green}Switching to branch 'tu-newat-fixes'...${nocolor}"
+	git checkout tu-newat-fixes
 
-			if git apply $patch_args "../$patch_file".patch ; then
-				echo "Patch applied successfully"
-			else
-				echo "Failed to apply $patch"
-				failed_patches+=("$patch")
-			fi
-		fi
-	done
-}
-
-patch_to_description() {
-	local arr=("$@")
-	for patch in "${arr[@]}"; do
-		patch_name="$(echo $patch | cut -d ";" -f 1 | xargs)"
-		patch_source="$(echo $patch | cut -d ";" -f 2 | xargs)"
-		patch_args="$(echo $patch | cut -d ";" -f 3 | xargs)"
-		if [[ $patch_source == *"../.."* ]]; then
-			echo "- $patch_name, $patch_source, $patch_args" >> description
-		else 
-			echo "- $patch_name, [$patch_source](https://gitlab.freedesktop.org/mesa/mesa/-/$patch_source), $patch_args" >> description
-		fi
-	done
+	commit_short=$(git rev-parse --short HEAD)
+	commit=$(git rev-parse HEAD)
+	mesa_version=$(cat VERSION | xargs)
+	version=$(awk -F'COMPLETE VK_MAKE_API_VERSION(|)' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
+	major=$(echo $version | cut -d "," -f 2 | xargs)
+	minor=$(echo $version | cut -d "," -f 3 | xargs)
+	patch=$(awk -F'VK_HEADER_VERSION |\n#define' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
+	vulkan_version="$major.$minor.$patch"
 }
 
 build_lib_for_android(){
-	echo "Creating meson cross file ..." $'\n'
 	local ndk_root_path
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		ndk_root_path="$workdir/$ndkver"
 	else	
 		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
 	fi
-
 	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
+	echo "Creating meson cross file ..." $'\n'
 	cat <<EOF >"$workdir/mesa/android-aarch64"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
@@ -181,31 +125,10 @@ EOF
 
 	echo "Generating build files ..." $'\n'
 	cd "$workdir/mesa"
-	meson setup build-android-aarch64 \
-		--cross-file "android-aarch64" \
-		-Dbuildtype=release \
-		-Dplatforms=android \
-		-Dplatform-sdk-version=$sdkver \
-		-Dandroid-stub=true \
-		-Dgallium-drivers= \
-		-Dvulkan-drivers=freedreno \
-		-Dvulkan-beta=true \
-		-Dfreedreno-kmds=kgsl \
-		-Db_lto=true \
-		-Dstrip=false \
-		-Degl=disabled 2>&1 | tee "$workdir/meson_log"
+	meson setup build-android-aarch64 --cross-file "android-aarch64" -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir/meson_log"
 
 	echo "Compiling build files ..." $'\n'
 	ninja -C build-android-aarch64 2>&1 | tee "$workdir/ninja_log"
-
-	local compiled_lib="$workdir/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so"
-	if [ ! -f "$compiled_lib" ]; then
-		echo -e "${red}--------------------------------------------------------------------${nocolor}"
-		echo -e "${red}COMPILATION FAILED: The file libvulkan_freedreno.so was not created.${nocolor}"
-		echo -e "${red}Check the compilation log above for the specific C++ error message.${nocolor}"
-		echo -e "${red}--------------------------------------------------------------------${nocolor}"
-		exit 1
-	fi
 }
 
 port_lib_for_adrenotool(){
@@ -215,21 +138,20 @@ port_lib_for_adrenotool(){
 	patchelf --set-soname vulkan.adreno.so libvulkan_freedreno.so
 	mv libvulkan_freedreno.so vulkan.ad07XX.so
 
+	if ! [ -a vulkan.ad07XX.so ]; then
+		echo -e "$red Build failed! $nocolor" && exit 1
+	fi
+
 	mkdir -p "$packagedir" && cd "$_"
 
 	date=$(date +'%b %d, %Y')
-	suffix=""
-
-	if [ ! -z "$1" ]; then
-		suffix="_$1"
-	fi
-
+	
 	cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "Turnip - $date - $commit_short$suffix",
-  "description": "Compiled from Mesa (Danil's fork, tu-newat-fixes), Commit $commit_short$suffix",
-  "author": "mesa",
+  "name": "Turnip - $date - $commit_short",
+  "description": "Compiled from Mesa (Danil's fork, tu-newat-fixes), Commit $commit_short",
+  "author": "mesa-ci",
   "packageVersion": "1",
   "vendor": "Mesa",
   "driverVersion": "$mesa_version/vk$vulkan_version",
@@ -244,34 +166,19 @@ EOF
 
 	echo "Packing files in to adrenotool package ..." $'\n'
 	cd "$packagedir"
-	zip -9 "$workdir"/"$filename$suffix".zip ./*
+	zip -9 "$workdir"/"$filename".zip ./*
 
 	cd "$workdir"
 
-	if [ -z "$1" ]; then
-		echo "Turnip - $mesa_version - $date" > release
-		echo "${mesa_version}_${commit_short}" > tag
-		echo  "$filename$suffix" > filename
-		echo "### Base commit : [$commit_short](https://gitlab.freedesktop.org/Danil/mesa/-/commit/$commit)" > description
-		echo "false" > patched
-		echo "false" > experimental
-	else		
-		if [ $1 == "patched" ]; then 
-			echo "## Upstreams / Patches" >> description
-			# ...
-		else 
-			echo "### Upstreams / Patches (Experimental)" >> description
-			# ...
-		fi
-	fi
-
-	if (( ${#failed_patches[@]} )); then
-		echo "" >> description
-		echo "#### Patches that failed to apply" >> description
-		patch_to_description ${failed_patches[@]}
-	fi
+	# Lógica simplificada para gerar arquivos de release
+	echo "Turnip - $mesa_version - $date" > release
+	echo "${mesa_version}_${commit_short}" > tag
+	echo  $filename > filename
+	# Link do commit atualizado para o fork do Danil
+	echo "### Build from Danil's fork (tu-newat-fixes)" > description
+	echo "### Base commit: [$commit_short](https://gitlab.freedesktop.org/Danil/mesa/-/commit/$commit)" >> description
 	
-	if ! [ -a "$workdir"/"$filename$suffix".zip ];
+	if ! [ -a "$workdir"/"$filename".zip ];
 		then echo -e "$red-Packing failed!$nocolor" && exit 1
 		else echo -e "$green-All done, you can take your zip from this folder;$nocolor" && echo "$workdir"/
 	fi
