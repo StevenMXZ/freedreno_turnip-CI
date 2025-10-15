@@ -7,8 +7,9 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 packagedir="$workdir/turnip_module"
 ndkver="android-ndk-r29"
-sdkver="33"
-mesasrc="https://gitlab.freedesktop.org/mesa/mesa.git"
+sdkver="35"
+# ALTERADO: URL do repositório para o fork do Danil
+mesasrc="https://gitlab.freedesktop.org/Danil/mesa.git"
 
 base_patches=()
 experimental_patches=()
@@ -80,10 +81,14 @@ prepare_workdir(){
 			rm -rf mesa
 		fi
 		
-		echo "Cloning mesa ..." $'\n'
+		echo "Cloning mesa from Danil's fork..." $'\n'
 		git clone "$mesasrc"
 
 		cd mesa
+		
+		# ADICIONADO: Checkout para o branch específico
+		echo -e "${green}Switching to branch 'tu-newat-fixes'...${nocolor}"
+		git checkout tu-newat-fixes
 		
 		commit_short=$(git rev-parse --short HEAD)
 		commit=$(git rev-parse HEAD)
@@ -148,21 +153,25 @@ patch_to_description() {
 
 build_lib_for_android(){
 	echo "Creating meson cross file ..." $'\n'
+	local ndk_root_path
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
-		ndk="$workdir/$ndkver/toolchains/llvm/prebuilt/linux-x86_64/bin"
+		ndk_root_path="$workdir/$ndkver"
 	else	
-		ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
 	fi
+
+	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
+	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
 	cat <<EOF >"$workdir/mesa/android-aarch64"
 [binaries]
-ar = '$ndk/llvm-ar'
-c = ['ccache', '$ndk/aarch64-linux-android$sdkver-clang']
-cpp = ['ccache', '$ndk/aarch64-linux-android$sdkver-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+ar = '$ndk_bin_path/llvm-ar'
+c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path', '-Dandroid-strict=false']
+cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-Dandroid-strict=false', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
 cpp_ld = 'lld'
-strip = '$ndk/aarch64-linux-android-strip'
-pkg-config = ['env', 'PKG_CONFIG_LIBDIR=$ndk/pkg-config', '/usr/bin/pkg-config']
+strip = '$ndk_bin_path/aarch64-linux-android-strip'
+pkg-config = ['env', 'PKG_CONFIG_LIBDIR=$ndk_bin_path/pkg-config', '/usr/bin/pkg-config']
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
@@ -174,7 +183,7 @@ EOF
 	cd "$workdir/mesa"
 	meson setup build-android-aarch64 \
 		--cross-file "android-aarch64" \
-		-Dbuildtype=debug \
+		-Dbuildtype=release \
 		-Dplatforms=android \
 		-Dplatform-sdk-version=$sdkver \
 		-Dandroid-stub=true \
@@ -219,7 +228,7 @@ port_lib_for_adrenotool(){
 {
   "schemaVersion": 1,
   "name": "Turnip - $date - $commit_short$suffix",
-  "description": "Compiled from Mesa, Commit $commit_short$suffix",
+  "description": "Compiled from Mesa (Danil's fork, tu-newat-fixes), Commit $commit_short$suffix",
   "author": "mesa",
   "packageVersion": "1",
   "vendor": "Mesa",
@@ -243,26 +252,16 @@ EOF
 		echo "Turnip - $mesa_version - $date" > release
 		echo "${mesa_version}_${commit_short}" > tag
 		echo  "$filename$suffix" > filename
-		echo "### Base commit : [$commit_short](https://gitlab.freedesktop.org/mesa/mesa/-/commit/$commit)" > description
+		echo "### Base commit : [$commit_short](https://gitlab.freedesktop.org/Danil/mesa/-/commit/$commit)" > description
 		echo "false" > patched
 		echo "false" > experimental
 	else		
 		if [ $1 == "patched" ]; then 
 			echo "## Upstreams / Patches" >> description
-			echo "These have not been merged by Mesa officially yet and may introduce bugs or" >> description
-			echo "we revert stuff that breaks games but still got merged in (see --reverse)" >> description
-			patch_to_description ${base_patches[@]}
-			echo "true" > patched
-			echo "" >> description
-			echo "_Upstreams / Patches are only applied to the patched version (\_patched.zip)_" >> description
-			echo "_If a patch is not present anymore, it's most likely because it got merged, is not needed anymore or was breaking something._" >> description
+			# ...
 		else 
 			echo "### Upstreams / Patches (Experimental)" >> description
-			echo "Include previously listed patches + experimental ones" >> description
-			patch_to_description ${experimental_patches[@]}
-			echo "true" > experimental
-			echo "" >> description
-			echo "_Experimental patches are only applied to the experimental version (\_experimental.zip)_" >> description
+			# ...
 		fi
 	fi
 
