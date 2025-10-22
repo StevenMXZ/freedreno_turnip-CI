@@ -3,100 +3,67 @@ green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
 
+# --- Config ---
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
-packagedir="$workdir/turnip_module"
 ndkver="android-ndk-r29"
 sdkver="35"
-# ALTERADO: URL de volta para o repositório principal do Mesa
-mesasrc="https://gitlab.freedesktop.org/mesa/mesa.git"
-# ADICIONADO: Tag específica a ser compilada
-mesa_tag="26.0.0"
+mesa_repo_main="https://gitlab.freedesktop.org/mesa/mesa.git"
+mesa_repo_danil="https://gitlab.freedesktop.org/Danil/mesa.git"
+danil_branch="tu-newat-fixes"
+mesa_tag_patched="26.0.0" # Tag para a versão patched
 
-base_patches=()
-experimental_patches=()
-failed_patches=()
-commit=""
-commit_short=""
-mesa_version=""
-vulkan_version=""
+# --- Variáveis Globais para Release Info ---
+commit_main=""
+commit_danil=""
+commit_patched=""
+version_main=""
+version_danil=""
+version_patched=""
+
 clear
 
-run_all(){
-	check_deps
-	prep
-}
-
-prep () {
-	prepare_workdir
-	build_lib_for_android
-	port_lib_for_adrenotool
-}
-
+# --- Funções Auxiliares ---
 check_deps(){
-	echo "Checking system for required Dependencies ..."
-	for deps_chk in $deps;
-		do
-			sleep 0.25
-			if command -v "$deps_chk" >/dev/null 2>&1 ; then
-				echo -e "$green - $deps_chk found $nocolor"
-			else
-				echo -e "$red - $deps_chk not found, can't continue. $nocolor"
-				deps_missing=1
-			fi;
-		done
-
-		if [ "$deps_missing" == "1" ]
-			then echo "Please install missing dependencies" && exit 1
+	echo "Checking system dependencies ..."
+	for dep in $deps; do
+		if ! command -v $dep >/dev/null 2>&1; then
+			echo -e "$red Missing dependency: $dep$nocolor"
+			missing=1
+		else
+			echo -e "$green Found: $dep$nocolor"
 		fi
-
-	echo "Installing python Mako dependency (if missing) ..." $'\n'
-	pip install mako &> /dev/null
+	done
+	if [ "$missing" == "1" ]; then
+		echo "Please install missing dependencies" && exit 1
+	fi
+	pip install mako &> /dev/null || true
 }
 
-prepare_workdir(){
-	echo "Creating and entering to work directory ..." $'\n'
-	mkdir -p "$workdir" && cd "$_"
-
+prepare_ndk(){
+	echo "Preparing NDK ..."
+	cd "$workdir"
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		if [ ! -d "$ndkver" ]; then
-			echo "Downloading android-ndk from google server (~640 MB) ..." $'\n'
+			echo "Downloading android-ndk ..."
 			curl https://dl.google.com/android/repository/"$ndkver"-linux.zip --output "$ndkver"-linux.zip &> /dev/null
-			echo "Exracting android-ndk to a folder ..." $'\n'
+			echo "Exracting android-ndk ..."
 			unzip "$ndkver"-linux.zip  &> /dev/null
 		fi
-	else	
+	else
 		echo "Using android ndk from github image"
 	fi
-
-	if [ -d mesa ]; then
-		echo "Removing old mesa ..." $'\n'
-		rm -rf mesa
-	fi
-	
-	echo "Cloning main Mesa repository..." $'\n'
-	# Clone completo para garantir que a tag exista
-	git clone "$mesasrc"
-
-	cd mesa
-	
-	# ALTERADO: Checkout para a tag específica 26.0.0
-	echo -e "${green}Checking out tag '$mesa_tag'...${nocolor}"
-	git checkout $mesa_tag
-
-	# Obtém o hash do commit correspondente à tag
-	commit_short=$(git rev-parse --short HEAD)
-	commit=$(git rev-parse HEAD)
-	# A versão agora é a própria tag
-	mesa_version="$mesa_tag"
-	version=$(awk -F'COMPLETE VK_MAKE_API_VERSION(|)' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
-	major=$(echo $version | cut -d "," -f 2 | xargs)
-	minor=$(echo $version | cut -d "," -f 3 | xargs)
-	patch=$(awk -F'VK_HEADER_VERSION |\n#define' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
-	vulkan_version="$major.$minor.$patch"
 }
 
-build_lib_for_android(){
+# Função genérica para compilar
+compile_mesa() {
+    local source_dir=$1
+    local build_dir_name=$2 # Ex: build-main, build-danil
+    local description=$3
+
+    echo -e "${green}--- Compiling: $description ---${nocolor}"
+    cd "$source_dir"
+
 	local ndk_root_path
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		ndk_root_path="$workdir/$ndkver"
@@ -106,8 +73,9 @@ build_lib_for_android(){
 	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-	echo "Creating meson cross file ..." $'\n'
-	cat <<EOF >"$workdir/mesa/android-aarch64"
+	# Criar cross file específico para este build (evita conflitos)
+	local cross_file_path="$source_dir/android-aarch64-crossfile.txt"
+	cat <<EOF >"$cross_file_path"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
 c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
@@ -123,66 +91,167 @@ cpu = 'armv8'
 endian = 'little'
 EOF
 
-	echo "Generating build files ..." $'\n'
-	cd "$workdir/mesa"
-	meson setup build-android-aarch64 --cross-file "android-aarch64" -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir/meson_log"
+	echo "Generating build files for $description..."
+	meson setup "$build_dir_name" --cross-file "$cross_file_path" -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir/meson_log_$description"
 
-	echo "Compiling build files ..." $'\n'
-	ninja -C build-android-aarch64 2>&1 | tee "$workdir/ninja_log"
-}
+	echo "Compiling $description..."
+	ninja -C "$build_dir_name" 2>&1 | tee "$workdir/ninja_log_$description"
 
-port_lib_for_adrenotool(){
-	local compiled_lib="$workdir/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so"
+    local compiled_lib="$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
 	if [ ! -f "$compiled_lib" ]; then
-		echo -e "${red}Build failed: libvulkan_freedreno.so not found. Check compilation logs.${nocolor}"
+		echo -e "${red}Build failed for $description: libvulkan_freedreno.so not found.${nocolor}"
 		exit 1
 	fi
-	
-	echo "Using patchelf to match soname ..."  $'\n'
-	cp "$compiled_lib" "$workdir"
-	cd "$workdir"
-	patchelf --set-soname vulkan.adreno.so libvulkan_freedreno.so
-	mv libvulkan_freedreno.so vulkan.ad07XX.so
+    echo -e "${green}--- Finished Compiling: $description ---${nocolor}\n"
+    cd "$workdir" # Voltar para o diretório principal
+}
 
-	mkdir -p "$packagedir" && cd "$_"
+# Função genérica para empacotar
+package_driver() {
+    local source_dir=$1       # Ex: mesa_main
+    local build_dir_name=$2   # Ex: build-main
+    local output_suffix=$3    # Ex: main, danil, patched_ubwc
+    local description_name=$4 # Ex: Mesa Main, Danil's Fork
+    local version_str=$5      # Ex: 26.0.0-devel
+    local commit_hash_short=$6 # Ex: a1b2c3d
+    local commit_hash_full=$7  # Ex: a1b2c3d4e5f...
+    local repo_url=$8          # URL base para link do commit
 
-	date=$(date +'%b %d, %Y')
-	
+    echo -e "${green}--- Packaging: $description_name ---${nocolor}"
+    local compiled_lib="$workdir/$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
+    local output_filename="turnip_${output_suffix}_$(date +'%Y%m%d')_${commit_hash_short}.zip"
+    local package_temp_dir="$workdir/package_temp_${output_suffix}"
+    local lib_final_name="vulkan.ad07XX.so"
+
+    mkdir -p "$package_temp_dir"
+    
+    cp "$compiled_lib" "$package_temp_dir/libvulkan_freedreno.so"
+    cd "$package_temp_dir"
+    
+    patchelf --set-soname vulkan.adreno.so libvulkan_freedreno.so
+    mv libvulkan_freedreno.so "$lib_final_name"
+
+	date_meta=$(date +'%b %d, %Y')
 	cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "Turnip - $date - $mesa_version",
-  "description": "Compiled from Mesa tag $mesa_version, Commit $commit_short",
+  "name": "Turnip ($description_name) - $date_meta - $commit_hash_short",
+  "description": "Compiled from $description_name, Commit $commit_hash_short",
   "author": "mesa-ci",
   "packageVersion": "1",
   "vendor": "Mesa",
-  "driverVersion": "$mesa_version/vk$vulkan_version",
+  "driverVersion": "$version_str",
   "minApi": 27,
-  "libraryName": "vulkan.ad07XX.so"
+  "libraryName": "$lib_final_name"
 }
 EOF
 
-	filename=turnip_"$(date +'%Y%m%d')"_"${mesa_version//./_}"
-	echo "Copy necessary files from work directory ..." $'\n'
-	cp "$workdir"/vulkan.ad07XX.so "$packagedir"
-
-	echo "Packing files in to adrenotool package ..." $'\n'
-	cd "$packagedir"
-	zip -9 "$workdir"/"$filename".zip ./*
-
-	cd "$workdir"
-
-	echo "Turnip - Mesa $mesa_version - $date" > release
-	echo "${mesa_version//./_}_${commit_short}" > tag # Tag para release no GitHub
-	echo  $filename > filename
-	# Descrição atualizada para refletir a tag
-	echo "### Build from Mesa tag: $mesa_version" > description
-	echo "### Commit: [$commit_short](https://gitlab.freedesktop.org/mesa/mesa/-/commit/$commit)" >> description
-	
-	if ! [ -a "$workdir"/"$filename".zip ];
-		then echo -e "$red-Packing failed!$nocolor" && exit 1
-		else echo -e "$green-All done, you can take your zip from this folder;$nocolor" && echo "$workdir"/
+	echo "Packing $output_filename..."
+	zip -9 "$workdir/$output_filename" "$lib_final_name" meta.json
+    
+    if ! [ -f "$workdir/$output_filename" ]; then
+		echo -e "$red Packaging failed for $description_name! $nocolor" && exit 1
+	else
+		echo -e "$green Package ready: $workdir/$output_filename $nocolor"
 	fi
+
+    rm -rf "$package_temp_dir" # Limpa a pasta temporária
+    cd "$workdir" # Volta para o diretório principal
+    echo -e "${green}--- Finished Packaging: $description_name ---${nocolor}\n"
 }
 
-run_all
+# --- Funções de Build Específicas ---
+
+build_mesa_main() {
+    local dir_name="mesa_main"
+    local build_dir="build-main"
+    echo -e "${green}=== Building Mesa Main ===${nocolor}"
+    git clone --depth=1 "$mesa_repo_main" "$dir_name"
+    cd "$dir_name"
+    commit_main=$(git rev-parse HEAD)
+    version_main=$(cat VERSION | xargs)
+    cd ..
+    compile_mesa "$workdir/$dir_name" "$build_dir" "Mesa_Main"
+    package_driver "$dir_name" "$build_dir" "main" "Mesa Main" "$version_main" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_main" "$mesa_repo_main"
+}
+
+build_danil_fork() {
+    local dir_name="mesa_danil"
+    local build_dir="build-danil"
+    echo -e "${green}=== Building Danil's Fork ===${nocolor}"
+    git clone "$mesa_repo_danil" "$dir_name"
+    cd "$dir_name"
+    git checkout "$danil_branch"
+    commit_danil=$(git rev-parse HEAD)
+    version_danil=$(cat VERSION | xargs)
+    cd ..
+    compile_mesa "$workdir/$dir_name" "$build_dir" "Danil_Fork"
+    package_driver "$dir_name" "$build_dir" "danil" "Danil's Fork ($danil_branch)" "$version_danil" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_danil" "$mesa_repo_danil"
+}
+
+build_mesa_patched() {
+    local dir_name="mesa_patched"
+    local build_dir="build-patched"
+    echo -e "${green}=== Building Patched Mesa ($mesa_tag_patched) ===${nocolor}"
+    git clone "$mesa_repo_main" "$dir_name"
+    cd "$dir_name"
+    git checkout "$mesa_tag_patched"
+    
+    echo "Applying patch: enable_tp_ubwc_flag_hint = True..."
+	sed -i 's/enable_tp_ubwc_flag_hint = False,/enable_tp_ubwc_flag_hint = True,/' src/freedreno/common/freedreno_devices.py
+	echo "Patch applied."
+
+    commit_patched=$(git rev-parse HEAD)
+    version_patched="$mesa_tag_patched" # A versão é a tag
+    cd ..
+    compile_mesa "$workdir/$dir_name" "$build_dir" "Mesa_Patched"
+    package_driver "$dir_name" "$build_dir" "patched_ubwc" "Mesa $mesa_tag_patched (Patched: UBWC Hint)" "$version_patched" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_patched" "$mesa_repo_main"
+}
+
+# --- Geração de Info para Release ---
+generate_release_info() {
+    echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
+    cd "$workdir"
+    local date_tag=$(date +'%Y%m%d')
+    local main_commit_short=$(git -C mesa_main rev-parse --short HEAD)
+
+    # Tag baseada na data e commit principal
+    echo "Mesa-${date_tag}-${main_commit_short}" > tag
+    echo "Turnip CI Build - ${date_tag}" > release
+
+    # Descrição detalhada
+    echo "Automated Turnip CI build." > description
+    echo "" >> description
+    echo "### Included Drivers:" >> description
+    echo "" >> description
+    echo "**1. Mesa Main:**" >> description
+    echo "   - Version: \`$version_main\`" >> description
+    echo "   - Commit: [${main_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_main})" >> description
+    echo "" >> description
+    echo "**2. Danil's Fork:**" >> description
+    echo "   - Branch: \`$danil_branch\`" >> description
+    echo "   - Version: \`$version_danil\`" >> description
+    echo "   - Commit: [$(git -C mesa_danil rev-parse --short HEAD)](${mesa_repo_danil%.git}/-/commit/${commit_danil})" >> description
+    echo "" >> description
+    echo "**3. Mesa Patched (UBWC Hint):**" >> description
+    echo "   - Base Tag: \`$version_patched\`" >> description
+    echo "   - Patch: \`enable_tp_ubwc_flag_hint = True\`" >> description
+    echo "   - Commit: [$(git -C mesa_patched rev-parse --short HEAD)](${mesa_repo_main%.git}/-/commit/${commit_patched})" >> description
+    
+    echo -e "${green}Release info generated.${nocolor}"
+}
+
+# --- Execução Principal ---
+check_deps
+mkdir -p "$workdir"
+prepare_ndk
+
+# Executa os builds em sequência
+build_mesa_main
+build_danil_fork
+build_mesa_patched
+
+# Gera os arquivos para a release do GitHub
+generate_release_info
+
+echo -e "${green}All builds completed successfully!${nocolor}"
