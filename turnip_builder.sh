@@ -55,10 +55,9 @@ prepare_ndk(){
 	fi
 }
 
-# Função genérica para compilar
 compile_mesa() {
     local source_dir=$1
-    local build_dir_name=$2 # Ex: build-main, build-danil
+    local build_dir_name=$2
     local description=$3
 
     echo -e "${green}--- Compiling: $description ---${nocolor}"
@@ -73,7 +72,6 @@ compile_mesa() {
 	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-	# Criar cross file específico para este build (evita conflitos)
 	local cross_file_path="$source_dir/android-aarch64-crossfile.txt"
 	cat <<EOF >"$cross_file_path"
 [binaries]
@@ -103,25 +101,31 @@ EOF
 		exit 1
 	fi
     echo -e "${green}--- Finished Compiling: $description ---${nocolor}\n"
-    cd "$workdir" # Voltar para o diretório principal
+    cd "$workdir"
 }
 
-# Função genérica para empacotar
 package_driver() {
-    local source_dir=$1       # Ex: mesa_main
-    local build_dir_name=$2   # Ex: build-main
-    local output_suffix=$3    # Ex: main, danil, patched_ubwc
-    local description_name=$4 # Ex: Mesa Main, Danil's Fork
-    local version_str=$5      # Ex: 26.0.0-devel
-    local commit_hash_short=$6 # Ex: a1b2c3d
-    local commit_hash_full=$7  # Ex: a1b2c3d4e5f...
-    local repo_url=$8          # URL base para link do commit
+    local source_dir=$1
+    local build_dir_name=$2
+    local output_suffix=$3 # main, danil, oneui
+    local description_name=$4
+    local version_str=$5
+    local commit_hash_short=$6
+    local commit_hash_full=$7
+    local repo_url=$8
 
     echo -e "${green}--- Packaging: $description_name ---${nocolor}"
     local compiled_lib="$workdir/$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
-    local output_filename="turnip_${output_suffix}_$(date +'%Y%m%d')_${commit_hash_short}.zip"
     local package_temp_dir="$workdir/package_temp_${output_suffix}"
-    local lib_final_name="vulkan.ad07XX.so"
+    local lib_final_name="vulkan.ad07XX.so" # Nome final dentro do zip
+    
+    local filename_base="turnip_$(date +'%Y%m%d')_${commit_hash_short}"
+    local output_filename
+    if [[ "$output_suffix" == "main" ]]; then
+        output_filename="${filename_base}.zip"
+    else
+        output_filename="${filename_base}_${output_suffix}.zip"
+    fi
 
     mkdir -p "$package_temp_dir"
     
@@ -155,8 +159,8 @@ EOF
 		echo -e "$green Package ready: $workdir/$output_filename $nocolor"
 	fi
 
-    rm -rf "$package_temp_dir" # Limpa a pasta temporária
-    cd "$workdir" # Volta para o diretório principal
+    rm -rf "$package_temp_dir"
+    cd "$workdir"
     echo -e "${green}--- Finished Packaging: $description_name ---${nocolor}\n"
 }
 
@@ -202,10 +206,10 @@ build_mesa_patched() {
 	echo "Patch applied."
 
     commit_patched=$(git rev-parse HEAD)
-    version_patched="$mesa_tag_patched" # A versão é a tag
+    version_patched="$mesa_tag_patched"
     cd ..
     compile_mesa "$workdir/$dir_name" "$build_dir" "Mesa_Patched"
-    package_driver "$dir_name" "$build_dir" "patched_ubwc" "Mesa $mesa_tag_patched (Patched: UBWC Hint)" "$version_patched" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_patched" "$mesa_repo_main"
+    package_driver "$dir_name" "$build_dir" "oneui" "Mesa $mesa_tag_patched (Patched: OneUI/UBWC)" "$version_patched" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_patched" "$mesa_repo_main"
 }
 
 # --- Geração de Info para Release ---
@@ -214,32 +218,43 @@ generate_release_info() {
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
     local main_commit_short=$(git -C mesa_main rev-parse --short HEAD)
+    local danil_commit_short=$(git -C mesa_danil rev-parse --short HEAD)
+    local patched_commit_short=$(git -C mesa_patched rev-parse --short HEAD)
 
-    # Tag baseada na data e commit principal
+    # Tag para a release
     echo "Mesa-${date_tag}-${main_commit_short}" > tag
+    # Nome da release
     echo "Turnip CI Build - ${date_tag}" > release
 
-    # Descrição detalhada
+    # Criação do arquivo de descrição
     echo "Automated Turnip CI build." > description
     echo "" >> description
     echo "### Included Drivers:" >> description
     echo "" >> description
-    echo "**1. Mesa Main:**" >> description
+    
+    # Descrição Build 1: Mesa Main
+    echo "**1. Latest Mesa Main (turnip\_<date>\_${main_commit_short}.zip):**" >> description
+    echo "   - Standard Turnip driver built from the latest Mesa main branch." >> description
     echo "   - Version: \`$version_main\`" >> description
     echo "   - Commit: [${main_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_main})" >> description
     echo "" >> description
-    echo "**2. Danil's Fork:**" >> description
-    echo "   - Branch: \`$danil_branch\`" >> description
+    
+    # Descrição Build 2: Danil's Fork
+    echo "**2. Danil's Fork (turnip\_danil\_<date>\_${danil_commit_short}.zip):**" >> description
+    echo "   - Build from Danil's fork, branch \`$danil_branch\`. Includes potential fixes/improvements (e.g., for Autotune based on branch name)." >> description
     echo "   - Version: \`$version_danil\`" >> description
-    echo "   - Commit: [$(git -C mesa_danil rev-parse --short HEAD)](${mesa_repo_danil%.git}/-/commit/${commit_danil})" >> description
+    echo "   - Commit: [${danil_commit_short}](${mesa_repo_danil%.git}/-/commit/${commit_danil})" >> description
     echo "" >> description
-    echo "**3. Mesa Patched (UBWC Hint):**" >> description
-    echo "   - Base Tag: \`$version_patched\`" >> description
-    echo "   - Patch: \`enable_tp_ubwc_flag_hint = True\`" >> description
-    echo "   - Commit: [$(git -C mesa_patched rev-parse --short HEAD)](${mesa_repo_main%.git}/-/commit/${commit_patched})" >> description
+    
+    # Descrição Build 3: Turnip OneUI (Patched)
+    echo "**3. Turnip OneUI Patched (turnip\_oneui\_<date>\_${patched_commit_short}.zip):**" >> description
+    echo "   - Based on Mesa tag \`$version_patched\`, patched to enable \`enable_tp_ubwc_flag_hint=True\`." >> description
+    echo "   - Aims for better compatibility on Adreno 740 devices running Samsung OneUI." >> description
+    echo "   - Commit (base): [${patched_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_patched})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
 }
+
 
 # --- Execução Principal ---
 check_deps
