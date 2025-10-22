@@ -8,9 +8,7 @@ workdir="$(pwd)/turnip_workdir"
 packagedir="$workdir/turnip_module"
 ndkver="android-ndk-r29"
 sdkver="35"
-# ALTERADO: URL de volta para o repositório principal do Mesa
 mesasrc="https://gitlab.freedesktop.org/mesa/mesa.git"
-# ADICIONADO: Tag específica a ser compilada
 mesa_tag="26.0.0"
 
 base_patches=()
@@ -75,20 +73,22 @@ prepare_workdir(){
 	fi
 	
 	echo "Cloning main Mesa repository..." $'\n'
-	# Clone completo para garantir que a tag exista
 	git clone "$mesasrc"
 
 	cd mesa
 	
-	# ALTERADO: Checkout para a tag específica 26.0.0
 	echo -e "${green}Checking out tag '$mesa_tag'...${nocolor}"
 	git checkout $mesa_tag
 
-	# Obtém o hash do commit correspondente à tag
+	# --- PATCH ADICIONADO ---
+	echo -e "${green}Applying patch: enable_tp_ubwc_flag_hint = True...${nocolor}"
+	sed -i 's/enable_tp_ubwc_flag_hint = False,/enable_tp_ubwc_flag_hint = True,/' src/freedreno/common/freedreno_devices.py
+	echo -e "${green}Patch applied successfully!${nocolor}\n"
+	# --- FIM DO PATCH ---
+
 	commit_short=$(git rev-parse --short HEAD)
 	commit=$(git rev-parse HEAD)
-	# A versão agora é a própria tag
-	mesa_version="$mesa_tag"
+	mesa_version="$mesa_tag" # Usamos a tag como versão principal
 	version=$(awk -F'COMPLETE VK_MAKE_API_VERSION(|)' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
 	major=$(echo $version | cut -d "," -f 2 | xargs)
 	minor=$(echo $version | cut -d "," -f 3 | xargs)
@@ -147,12 +147,14 @@ port_lib_for_adrenotool(){
 	mkdir -p "$packagedir" && cd "$_"
 
 	date=$(date +'%b %d, %Y')
+	# Adiciona um sufixo para indicar o patch
+	local suffix="_ubwc_hint" 
 	
 	cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "Turnip - $date - $mesa_version",
-  "description": "Compiled from Mesa tag $mesa_version, Commit $commit_short",
+  "name": "Turnip - $date - $mesa_version$suffix",
+  "description": "Compiled from Mesa tag $mesa_version (Patched: enable_tp_ubwc_flag_hint=True), Commit $commit_short",
   "author": "mesa-ci",
   "packageVersion": "1",
   "vendor": "Mesa",
@@ -162,7 +164,7 @@ port_lib_for_adrenotool(){
 }
 EOF
 
-	filename=turnip_"$(date +'%Y%m%d')"_"${mesa_version//./_}"
+	filename=turnip_"$(date +'%Y%m%d')"_"${mesa_version//./_}"$suffix
 	echo "Copy necessary files from work directory ..." $'\n'
 	cp "$workdir"/vulkan.ad07XX.so "$packagedir"
 
@@ -172,11 +174,11 @@ EOF
 
 	cd "$workdir"
 
-	echo "Turnip - Mesa $mesa_version - $date" > release
-	echo "${mesa_version//./_}_${commit_short}" > tag # Tag para release no GitHub
+	echo "Turnip - Mesa $mesa_version - $date$suffix" > release
+	echo "${mesa_version//./_}_${commit_short}${suffix}" > tag # Tag para release no GitHub
 	echo  $filename > filename
-	# Descrição atualizada para refletir a tag
 	echo "### Build from Mesa tag: $mesa_version" > description
+	echo "**Patched:** \`enable_tp_ubwc_flag_hint = True\`" >> description
 	echo "### Commit: [$commit_short](https://gitlab.freedesktop.org/mesa/mesa/-/commit/$commit)" >> description
 	
 	if ! [ -a "$workdir"/"$filename".zip ];
