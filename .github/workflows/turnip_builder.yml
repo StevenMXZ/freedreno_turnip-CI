@@ -1,67 +1,63 @@
-name: Build "turnip"
+# Nome do Workflow que aparecerá na aba "Actions" do GitHub
+name: Build and Release Turnip Drivers (Multiple Variants)
 
+# Gatilhos que iniciam o workflow
 on:
+  # Permite iniciar manualmente pela aba Actions
   workflow_dispatch:
+  # Aciona a build nos dias 1 e 15 de cada mês
   schedule:
-  - cron: "20 5 1,15 * *"
+    - cron: "20 5 1,15 * *"
 
 jobs:
-  start_building_turnip:
-    runs-on: ubuntu-24.04
+  build_and_release:
+    name: Build and Release Turnip Variants
+    runs-on: ubuntu-latest # Usando a versão estável mais recente do Ubuntu
     steps:
-    - uses: actions/checkout@v3
+      # 1. Faz o checkout do seu código (onde está o turnip_builder.sh)
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Prepare environment
-      run: |
-        sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
-        sudo apt update
-        sudo apt build-dep mesa -y
-    
-    - name: Execute build script
-      run: bash ./turnip_builder.sh
+      # 2. Prepara o ambiente e instala todas as dependências de build
+      - name: Prepare Build Environment
+        run: |
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update
+          # Instala as dependências de build do Mesa de forma eficiente
+          sudo apt-get build-dep mesa -y
+          # Garante que meson e ninja estejam nas versões mais recentes
+          pip install --upgrade meson ninja
 
-    - name: Upload a Build Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: Upload meson and ninja logs for debugging
-        path: |
-          turnip_workdir/ninja_log
-          turnip_workdir/mesa/build-android-aarch64/meson-logs/meson-log.txt
-    
-    - id: versions
-      name: "Get release info"
-      run: |
-        echo "name=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
-        echo "tag=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
-        echo "filename=$(cat turnip_workdir/filename)" >> "$GITHUB_OUTPUT"
-        echo "patched=$(cat turnip_workdir/patched)" >> "$GITHUB_OUTPUT"
-        echo "experimental=$(cat turnip_workdir/experimental)" >> "$GITHUB_OUTPUT"
+      # 3. Executa o nosso script de build principal (que agora faz 3 builds)
+      - name: Execute Build Script
+        run: bash ./turnip_builder.sh
 
-    - name: Release "turnip"
-      uses: softprops/action-gh-release@v1
-      with:
-        body_path: turnip_workdir/description
-        name: ${{ steps.versions.outputs.name }}
-        tag_name: ${{ steps.versions.outputs.tag }}
-        files: |
-           turnip_workdir/${{ steps.versions.outputs.filename }}.zip
+      # 4. Lê as informações da release geradas pelo script (tag, nome, descrição)
+      - name: Get Release Info
+        id: get_info
+        run: |
+          echo "RELEASE_NAME=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
+          echo "TAG_NAME=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
+          echo "BODY_PATH=turnip_workdir/description" >> "$GITHUB_OUTPUT"
 
-    - name: Release "turnip" with experimental
-      if: ${{ contains(steps.versions.outputs.experimental, 'true') }}
-      uses: softprops/action-gh-release@v1
-      with:
-        body_path: turnip_workdir/description
-        name: ${{ steps.versions.outputs.name }}
-        tag_name: ${{ steps.versions.outputs.tag }}
-        files: |
-           turnip_workdir/${{ steps.versions.outputs.filename }}_experimental.zip
-      
-    - name: Release "turnip" with patched
-      if: ${{ contains(steps.versions.outputs.patched, 'true') }}
-      uses: softprops/action-gh-release@v1
-      with:
-        body_path: turnip_workdir/description
-        name: ${{ steps.versions.outputs.name }}
-        tag_name: ${{ steps.versions.outputs.tag }}
-        files: |
-           turnip_workdir/${{ steps.versions.outputs.filename }}_patched.zip
+      # 5. Anexa os logs da compilação como um artefato para depuração
+      #    Inclui logs específicos de cada build gerados pelo script modificado
+      - name: Upload Logs as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            turnip_workdir/meson_log_*
+            turnip_workdir/ninja_log_*
+
+      # 6. Cria a Release ÚNICA no GitHub com TODOS os drivers compilados
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Usa as informações lidas do passo anterior
+          tag_name: ${{ steps.get_info.outputs.TAG_NAME }}
+          name: ${{ steps.get_info.outputs.RELEASE_NAME }}
+          body_path: ${{ steps.get_info.outputs.BODY_PATH }}
+          # Usa um curinga para encontrar e anexar TODOS os arquivos .zip da pasta
+          files: turnip_workdir/*.zip
+          draft: false # Mude para 'true' se quiser revisar antes de publicar
