@@ -9,16 +9,16 @@ workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
 mesa_repo_main="https://gitlab.freedesktop.org/mesa/mesa.git"
-mesa_repo_danil="https://gitlab.freedesktop.org/Danil/mesa.git"
-danil_branch="tu-newat-fixes"
-mesa_tag_patched="26.0.0" # Tag para a versão patched
+mesa_repo_danil="https://gitlab.freedesktop.org/Danil/mesa.git" # Mantido caso precise reativar
+autotuner_mr_num="37802"
+mesa_tag_patched="26.0.0"
 
-# --- Variáveis Globais para Release Info ---
+# --- Variáveis Globais ---
 commit_main=""
-commit_danil=""
+commit_autotuner_mr=""
 commit_patched=""
 version_main=""
-version_danil=""
+version_autotuner_mr=""
 version_patched=""
 
 clear
@@ -90,7 +90,7 @@ endian = 'little'
 EOF
 
 	echo "Generating build files for $description..."
-	meson setup "$build_dir_name" --cross-file "$cross_file_path" -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir/meson_log_$description"
+	meson setup --reconfigure "$build_dir_name" --cross-file "$cross_file_path" -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir/meson_log_$description"
 
 	echo "Compiling $description..."
 	ninja -C "$build_dir_name" 2>&1 | tee "$workdir/ninja_log_$description"
@@ -107,7 +107,7 @@ EOF
 package_driver() {
     local source_dir=$1
     local build_dir_name=$2
-    local output_suffix=$3 # main, danil, oneui
+    local output_suffix=$3 # main, autotuner_mr, oneui
     local description_name=$4
     local version_str=$5
     local commit_hash_short=$6
@@ -117,7 +117,22 @@ package_driver() {
     echo -e "${green}--- Packaging: $description_name ---${nocolor}"
     local compiled_lib="$workdir/$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
     local package_temp_dir="$workdir/package_temp_${output_suffix}"
-    local lib_final_name="vulkan.ad07XX.so" # Nome final dentro do zip
+    
+    local lib_final_name
+    case "$output_suffix" in
+        main)
+            lib_final_name="vulkan.adreno.main.so"
+            ;;
+        autotuner_mr)
+            lib_final_name="vulkan.adreno.autotuner.so"
+            ;;
+        oneui)
+            lib_final_name="vulkan.adreno.oneui.so"
+            ;;
+        *)
+            lib_final_name="vulkan.adreno.${output_suffix}.so"
+            ;;
+    esac
     
     local filename_base="turnip_$(date +'%Y%m%d')_${commit_hash_short}"
     local output_filename
@@ -129,11 +144,11 @@ package_driver() {
 
     mkdir -p "$package_temp_dir"
     
-    cp "$compiled_lib" "$package_temp_dir/libvulkan_freedreno.so"
+    cp "$compiled_lib" "$package_temp_dir/lib_temp.so"
     cd "$package_temp_dir"
     
-    patchelf --set-soname vulkan.adreno.so libvulkan_freedreno.so
-    mv libvulkan_freedreno.so "$lib_final_name"
+    patchelf --set-soname "$lib_final_name" lib_temp.so
+    mv lib_temp.so "$lib_final_name"
 
 	date_meta=$(date +'%b %d, %Y')
 	cat <<EOF >"meta.json"
@@ -179,18 +194,36 @@ build_mesa_main() {
     package_driver "$dir_name" "$build_dir" "main" "Mesa Main" "$version_main" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_main" "$mesa_repo_main"
 }
 
-build_danil_fork() {
-    local dir_name="mesa_danil"
-    local build_dir="build-danil"
-    echo -e "${green}=== Building Danil's Fork ===${nocolor}"
-    git clone "$mesa_repo_danil" "$dir_name"
+build_mesa_main_autotuner_mr() {
+    local dir_name="mesa_autotuner_mr"
+    local build_dir="build-autotuner-mr"
+    echo -e "${green}=== Building Mesa Main + Autotuner MR !${autotuner_mr_num} ===${nocolor}"
+    git clone "$mesa_repo_main" "$dir_name"
     cd "$dir_name"
-    git checkout "$danil_branch"
-    commit_danil=$(git rev-parse HEAD)
-    version_danil=$(cat VERSION | xargs)
+    
+	echo -e "${green}Configuring local git identity for merge...${nocolor}"
+	git config user.name "CI Builder"
+	git config user.email "ci@builder.com"
+	
+	echo -e "${green}Fetching Merge Request !${autotuner_mr_num}...${nocolor}"
+	git fetch origin "refs/merge-requests/${autotuner_mr_num}/head"
+	echo -e "${green}Merging fetched MR into current branch...${nocolor}"
+	if git merge --no-edit FETCH_HEAD; then
+		echo -e "${green}Merge successful!${nocolor}\n"
+	else
+		echo -e "${red}Merge failed for MR !${autotuner_mr_num}. Conflicts might need manual resolution.${nocolor}"
+        echo -e "${yellow}Skipping Autotuner MR build due to merge failure.${nocolor}"
+        cd ..
+        commit_autotuner_mr="" 
+        version_autotuner_mr="N/A"
+        return 
+	fi
+
+    commit_autotuner_mr=$(git rev-parse HEAD)
+    version_autotuner_mr=$(cat VERSION | xargs)
     cd ..
-    compile_mesa "$workdir/$dir_name" "$build_dir" "Danil_Fork"
-    package_driver "$dir_name" "$build_dir" "danil" "Danil's Fork ($danil_branch)" "$version_danil" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_danil" "$mesa_repo_danil"
+    compile_mesa "$workdir/$dir_name" "$build_dir" "Mesa_Autotuner_MR"
+    package_driver "$dir_name" "$build_dir" "autotuner_mr" "Mesa Main + Autotuner MR" "$version_autotuner_mr" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_autotuner_mr" "$mesa_repo_main"
 }
 
 build_mesa_patched() {
@@ -209,7 +242,8 @@ build_mesa_patched() {
     version_patched="$mesa_tag_patched"
     cd ..
     compile_mesa "$workdir/$dir_name" "$build_dir" "Mesa_Patched"
-    package_driver "$dir_name" "$build_dir" "oneui" "Mesa $mesa_tag_patched (Patched: OneUI/UBWC)" "$version_patched" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_patched" "$mesa_repo_main"
+    # ALTERADO: Descrição removendo "UBWC"
+    package_driver "$dir_name" "$build_dir" "oneui" "Mesa $mesa_tag_patched (Patched: OneUI)" "$version_patched" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_patched" "$mesa_repo_main"
 }
 
 # --- Geração de Info para Release ---
@@ -218,38 +252,40 @@ generate_release_info() {
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
     local main_commit_short=$(git -C mesa_main rev-parse --short HEAD)
-    local danil_commit_short=$(git -C mesa_danil rev-parse --short HEAD)
+    local autotuner_commit_short=""
+    if [ -d "mesa_autotuner_mr" ] && [ -n "$commit_autotuner_mr" ]; then
+       autotuner_commit_short=$(git -C mesa_autotuner_mr rev-parse --short HEAD)
+    fi
     local patched_commit_short=$(git -C mesa_patched rev-parse --short HEAD)
 
-    # Tag para a release
     echo "Mesa-${date_tag}-${main_commit_short}" > tag
-    # Nome da release
     echo "Turnip CI Build - ${date_tag}" > release
 
-    # Criação do arquivo de descrição
     echo "Automated Turnip CI build." > description
     echo "" >> description
     echo "### Included Drivers:" >> description
     echo "" >> description
     
-    # Descrição Build 1: Mesa Main
     echo "**1. Latest Mesa Main (turnip\_<date>\_${main_commit_short}.zip):**" >> description
     echo "   - Standard Turnip driver built from the latest Mesa main branch." >> description
     echo "   - Version: \`$version_main\`" >> description
     echo "   - Commit: [${main_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_main})" >> description
     echo "" >> description
     
-    # Descrição Build 2: Danil's Fork
-    echo "**2. Danil's Fork (turnip\_danil\_<date>\_${danil_commit_short}.zip):**" >> description
-    echo "   - Build from Danil's fork, branch \`$danil_branch\`. Includes potential fixes/improvements (e.g., for Autotune based on branch name)." >> description
-    echo "   - Version: \`$version_danil\`" >> description
-    echo "   - Commit: [${danil_commit_short}](${mesa_repo_danil%.git}/-/commit/${commit_danil})" >> description
+    echo "**2. Main + New Autotuner MR (turnip\_autotuner\_mr\_<date>\_${autotuner_commit_short}.zip):**" >> description
+    echo "   - Build from latest Mesa main branch + Merged Request !${autotuner_mr_num} (new autotuner logic)." >> description
+    if [ -n "$autotuner_commit_short" ]; then
+        echo "   - Version: \`$version_autotuner_mr\`" >> description
+        echo "   - Merged Commit: [${autotuner_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_autotuner_mr})" >> description
+    else
+        echo "   - *Build skipped due to merge conflicts.*" >> description
+    fi
     echo "" >> description
     
-    # Descrição Build 3: Turnip OneUI (Patched)
+    # ALTERADO: Descrição removendo "UBWC"
     echo "**3. Turnip OneUI Patched (turnip\_oneui\_<date>\_${patched_commit_short}.zip):**" >> description
     echo "   - Based on Mesa tag \`$version_patched\`, patched to enable \`enable_tp_ubwc_flag_hint=True\`." >> description
-    echo "   - Aims for better compatibility on Adreno 740 devices running Samsung OneUI." >> description
+    echo "   - Aims for better compatibility on certain Adreno devices running Samsung OneUI." >> description # Ajuste na descrição
     echo "   - Commit (base): [${patched_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_patched})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
@@ -261,12 +297,10 @@ check_deps
 mkdir -p "$workdir"
 prepare_ndk
 
-# Executa os builds em sequência
 build_mesa_main
-build_danil_fork
+build_mesa_main_autotuner_mr
 build_mesa_patched
 
-# Gera os arquivos para a release do GitHub
 generate_release_info
 
 echo -e "${green}All builds completed successfully!${nocolor}"
