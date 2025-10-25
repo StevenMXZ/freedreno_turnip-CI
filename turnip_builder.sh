@@ -9,7 +9,6 @@ workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
 mesa_repo_main="https://gitlab.freedesktop.org/mesa/mesa.git"
-mesa_repo_danil="https://gitlab.freedesktop.org/Danil/mesa.git" # Mantido caso precise reativar
 autotuner_mr_num="37802"
 mesa_tag_patched="26.0.0"
 
@@ -104,6 +103,7 @@ EOF
     cd "$workdir"
 }
 
+# --- FUNÇÃO package_driver REVERTIDA PARA NOMES .so PADRÃO ---
 package_driver() {
     local source_dir=$1
     local build_dir_name=$2
@@ -118,22 +118,11 @@ package_driver() {
     local compiled_lib="$workdir/$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
     local package_temp_dir="$workdir/package_temp_${output_suffix}"
     
-    local lib_final_name
-    case "$output_suffix" in
-        main)
-            lib_final_name="vulkan.adreno.main.so"
-            ;;
-        autotuner_mr)
-            lib_final_name="vulkan.adreno.autotuner.so"
-            ;;
-        oneui)
-            lib_final_name="vulkan.adreno.oneui.so"
-            ;;
-        *)
-            lib_final_name="vulkan.adreno.${output_suffix}.so"
-            ;;
-    esac
-    
+    # --- REVERTIDO: Usar nome padrão para o .so ---
+    local lib_final_name="vulkan.ad07XX.so" 
+    local soname="vulkan.adreno.so" # Soname esperado pelo sistema/ferramentas
+    # --- FIM REVERTIDO ---
+
     local filename_base="turnip_$(date +'%Y%m%d')_${commit_hash_short}"
     local output_filename
     if [[ "$output_suffix" == "main" ]]; then
@@ -144,11 +133,14 @@ package_driver() {
 
     mkdir -p "$package_temp_dir"
     
+    # Copia a biblioteca original
     cp "$compiled_lib" "$package_temp_dir/lib_temp.so"
     cd "$package_temp_dir"
     
-    patchelf --set-soname "$lib_final_name" lib_temp.so
+    # --- REVERTIDO: Patchelf e rename para nomes padrão ---
+    patchelf --set-soname "$soname" lib_temp.so
     mv lib_temp.so "$lib_final_name"
+    # --- FIM REVERTIDO ---
 
 	date_meta=$(date +'%b %d, %Y')
 	cat <<EOF >"meta.json"
@@ -161,11 +153,12 @@ package_driver() {
   "vendor": "Mesa",
   "driverVersion": "$version_str",
   "minApi": 27,
-  "libraryName": "$lib_final_name"
+  "libraryName": "$lib_final_name" # Nome do arquivo .so dentro do zip
 }
 EOF
 
 	echo "Packing $output_filename..."
+	# Zipa o arquivo .so com o nome padrão
 	zip -9 "$workdir/$output_filename" "$lib_final_name" meta.json
     
     if ! [ -f "$workdir/$output_filename" ]; then
@@ -215,7 +208,7 @@ build_mesa_main_autotuner_mr() {
         echo -e "${yellow}Skipping Autotuner MR build due to merge failure.${nocolor}"
         cd ..
         commit_autotuner_mr="" 
-        version_autotuner_mr="N/A"
+        version_autotuner_mr="N/A (skipped)"
         return 
 	fi
 
@@ -242,7 +235,6 @@ build_mesa_patched() {
     version_patched="$mesa_tag_patched"
     cd ..
     compile_mesa "$workdir/$dir_name" "$build_dir" "Mesa_Patched"
-    # ALTERADO: Descrição removendo "UBWC"
     package_driver "$dir_name" "$build_dir" "oneui" "Mesa $mesa_tag_patched (Patched: OneUI)" "$version_patched" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_patched" "$mesa_repo_main"
 }
 
@@ -282,10 +274,9 @@ generate_release_info() {
     fi
     echo "" >> description
     
-    # ALTERADO: Descrição removendo "UBWC"
     echo "**3. Turnip OneUI Patched (turnip\_oneui\_<date>\_${patched_commit_short}.zip):**" >> description
     echo "   - Based on Mesa tag \`$version_patched\`, patched to enable \`enable_tp_ubwc_flag_hint=True\`." >> description
-    echo "   - Aims for better compatibility on certain Adreno devices running Samsung OneUI." >> description # Ajuste na descrição
+    echo "   - Aims for better compatibility on certain Adreno devices running Samsung OneUI." >> description
     echo "   - Commit (base): [${patched_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_patched})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
@@ -294,7 +285,8 @@ generate_release_info() {
 
 # --- Execução Principal ---
 check_deps
-mkdir -p "$workdir"
+# Cria o diretório de trabalho principal uma vez
+mkdir -p "$workdir" 
 prepare_ndk
 
 build_mesa_main
