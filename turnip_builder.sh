@@ -8,9 +8,7 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
-# ALTERADO: URL para o fork do Danil
 mesasrc="https://gitlab.freedesktop.org/Danil/mesa.git"
-# ALTERADO: Branch a ser usado
 target_branch="tu-newat-fixes"
 
 # --- Variáveis Globais ---
@@ -108,6 +106,8 @@ package_driver() {
     local commit_hash_short=$5
     local commit_hash_full=$6
     local repo_url=$7
+    # ADICIONADO: Sufixo para o nome do arquivo ZIP
+    local output_suffix="dspm_dyn"
 
     echo -e "${green}--- Packaging: $description_name ---${nocolor}"
     local compiled_lib="$workdir/$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
@@ -116,8 +116,8 @@ package_driver() {
     local lib_final_name="vulkan.ad07XX.so" 
     local soname="vulkan.adreno.so" 
 
-    # Nome do arquivo ZIP sem sufixo extra, mas indicando o patch
-    local output_filename="turnip_$(date +'%Y%m%d')_${commit_hash_short}_dgmem_sp.zip"
+    # Nome do arquivo ZIP com sufixo
+    local output_filename="turnip_$(date +'%Y%m%d')_${commit_hash_short}_${output_suffix}.zip"
 
     mkdir -p "$package_temp_dir"
     
@@ -157,63 +157,65 @@ EOF
 }
 
 # --- Função ÚNICA de Build ---
-build_danil_patched_dgmem_sp() {
-    local dir_name="mesa_danil_patched_dgmem_sp"
-    local build_dir="build-danil-patched-dgmem-sp"
-    local description="Danil's Fork $target_branch (Patched: DGmemSP)"
+# Renomeada para clareza
+build_danil_patched_dspm_dyn() {
+    local dir_name="mesa_danil_patched_dspm_dyn"
+    local build_dir="build-danil-patched-dspm-dyn"
+    local description="Danil's Fork $target_branch (Patched: Disable SPM Dynamic Input)"
+    local patch_file_name="0002-Disable-single-prim-mode-for-dynamic-input-attachmen.patch"
     echo -e "${green}=== Building $description ===${nocolor}"
     git clone "$mesasrc" "$dir_name"
     cd "$dir_name"
     
-    # ALTERADO: Faz checkout do branch do Danil
     echo -e "${green}Checking out branch '$target_branch'...${nocolor}"
     git checkout "$target_branch"
     
-    echo "Creating Disable GMEM Single Prim patch file..."
-    cat << 'EOF' > "$workdir/0001-Disable-GMEM-in-single-prim-mode.patch"
-From 94a051bc7c78635617a1584a7accb94cc5b6ee7e Mon Sep 17 00:00:00 2001
+    # ALTERADO: Conteúdo do patch
+    echo "Creating $patch_file_name file..."
+    cat << 'EOF' > "$workdir/$patch_file_name"
+From 997218fbf9e22e3b038df29bb4d82bc33e897bdd Mon Sep 17 00:00:00 2001
 From: Dhruv Mark Collins <mark@igalia.com>
-Date: Tue, 28 Oct 2025 19:09:58 +0000
-Subject: [PATCH 1/2] Disable GMEM in single prim mode
+Date: Tue, 28 Oct 2025 19:11:20 +0000
+Subject: [PATCH 2/2] Disable single prim mode for dynamic input attachments
 
 ---
- src/freedreno/vulkan/tu_autotune.cc | 4 ++--
- 1 file changed, 2 insertions(+), 2 deletions(-)
+ src/freedreno/vulkan/tu_pipeline.cc | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
 
-diff --git a/src/freedreno/vulkan/tu_autotune.cc b/src/freedreno/vulkan/tu_autotune.cc
-index 9d084349ca7..3c13572cad0 100644
---- a/src/freedreno/vulkan/tu_autotune.cc
-+++ b/src/freedreno/vulkan/tu_autotune.cc
-@@ -1695,8 +1695,8 @@ tu_autotune::get_optimal_mode(struct tu_cmd_buffer *cmd_buffer, rp_ctx_t *rp_ctx
-     * SINGLE_PRIM_MODE(FLUSH_PER_OVERLAP_AND_OVERWRITE) or even SINGLE_PRIM_MODE(FLUSH), then that should cause
-     * significantly increased SYSMEM bandwidth (though we haven't quantified it).
+diff --git a/src/freedreno/vulkan/tu_pipeline.cc b/src/freedreno/vulkan/tu_pipeline.cc
+index bfb16340229..726b422577e 100644
+--- a/src/freedreno/vulkan/tu_pipeline.cc
++++ b/src/freedreno/vulkan/tu_pipeline.cc
+@@ -3567,8 +3567,7 @@ tu6_emit_prim_mode_sysmem(struct tu_cs *cs,
+     * for advanced_blend in sysmem mode if a feedback loop is detected.
      */
--   if (rp_state->sysmem_single_prim_mode)
--      return render_mode::GMEM;
-+   // if (rp_state->sysmem_single_prim_mode)
-+   //    return render_mode::GMEM;
+    enum a6xx_single_prim_mode sysmem_prim_mode =
+-      (raster_order_attachment_access || feedback_loops ||
+-       fs->fs.dynamic_input_attachments_used) ?
++      (raster_order_attachment_access || feedback_loops) ?
+       FLUSH_PER_OVERLAP_AND_OVERWRITE : NO_FLUSH;
  
-    /* If the user is using a fragment density map, then this will cause less FS invocations with GMEM, which has a
-     * hard-to-measure impact on performance because it depends on how heavy the FS is in addition to how many
+    if (sysmem_prim_mode == FLUSH_PER_OVERLAP_AND_OVERWRITE)
 -- 
 2.49.0
 
 EOF
 
-    echo "Applying Disable GMEM Single Prim patch..."
-    if git apply "$workdir/0001-Disable-GMEM-in-single-prim-mode.patch"; then
+    # ALTERADO: Aplica o novo patch
+    echo "Applying $patch_file_name..."
+    if git apply "$workdir/$patch_file_name"; then
         echo -e "${green}Patch applied successfully!${nocolor}\n"
     else
-        echo -e "${red}Failed to apply Disable GMEM Single Prim patch to branch $target_branch.${nocolor}"
+        echo -e "${red}Failed to apply $patch_file_name to branch $target_branch.${nocolor}"
         exit 1
     fi
 
     commit_target=$(git rev-parse HEAD)
-    version_target=$(cat VERSION | xargs) # Pega a versão do branch
+    version_target=$(cat VERSION | xargs)
     cd ..
     compile_mesa "$workdir/$dir_name" "$build_dir" "$description"
-    # Adicionado sufixo "dgmem_sp" para indicar o patch
-    package_driver "$dir_name" "$build_dir" "dgmem_sp" "$description" "$version_target" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_target" "$mesasrc"
+    # ALTERADO: Passa a descrição correta e o sufixo
+    package_driver "$dir_name" "$build_dir" "$description" "$version_target" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_target" "$mesasrc"
 }
 
 
@@ -222,17 +224,19 @@ generate_release_info() {
     echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
-    local target_commit_short=$(git -C mesa_danil_patched_dgmem_sp rev-parse --short HEAD)
+    local target_commit_short=$(git -C mesa_danil_patched_dspm_dyn rev-parse --short HEAD)
 
     # Tag baseada na data e commit
     echo "Danil-${date_tag}-${target_commit_short}" > tag
-    echo "Turnip CI Build - ${date_tag} (Danil's Fork + DGmemSP Patch)" > release
+    # ALTERADO: Nome da release
+    echo "Turnip CI Build - ${date_tag} (Danil's Fork + Disable SPM Dynamic Input Patch)" > release
 
     echo "Automated Turnip CI build." > description
     echo "" >> description
     echo "### Build Details:" >> description
     echo "**Base:** Danil's Mesa fork, branch \`$target_branch\`" >> description
-    echo "**Patch Applied:** Disable GMEM in single prim mode." >> description
+    # ALTERADO: Descrição do patch
+    echo "**Patch Applied:** Disable single prim mode for dynamic input attachments." >> description
     echo "**Commit:** [${target_commit_short}](${mesasrc%.git}/-/commit/${commit_target})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
@@ -245,7 +249,7 @@ mkdir -p "$workdir"
 prepare_ndk
 
 # Executa apenas o build desejado
-build_danil_patched_dgmem_sp
+build_danil_patched_dspm_dyn # Função renomeada
 
 generate_release_info
 
