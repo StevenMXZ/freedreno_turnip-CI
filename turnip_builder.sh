@@ -3,93 +3,61 @@ green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
 
+# --- Config ---
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
-packagedir="$workdir/turnip_module"
 ndkver="android-ndk-r29"
 sdkver="35"
-mesasrc="https://gitlab.freedesktop.org/Danil/mesa.git"
+mesa_repo_main="https://gitlab.freedesktop.org/mesa/mesa.git"
+# Tag base para o patch
+mesa_tag_target="26.0.0"
 
-base_patches=()
-experimental_patches=()
-failed_patches=()
-commit=""
-commit_short=""
-mesa_version=""
-vulkan_version=""
+# --- Variáveis Globais ---
+commit_target=""
+version_target=""
+
 clear
 
-run_all(){
-	check_deps
-	prep
-}
-
-prep () {
-	prepare_workdir
-	build_lib_for_android
-	port_lib_for_adrenotool
-}
-
+# --- Funções Auxiliares ---
 check_deps(){
-	echo "Checking system for required Dependencies ..."
-	for deps_chk in $deps;
-		do
-			sleep 0.25
-			if command -v "$deps_chk" >/dev/null 2>&1 ; then
-				echo -e "$green - $deps_chk found $nocolor"
-			else
-				echo -e "$red - $deps_chk not found, can't continue. $nocolor"
-				deps_missing=1
-			fi;
-		done
-
-		if [ "$deps_missing" == "1" ]
-			then echo "Please install missing dependencies" && exit 1
+	echo "Checking system dependencies ..."
+	for dep in $deps; do
+		if ! command -v $dep >/dev/null 2>&1; then
+			echo -e "$red Missing dependency: $dep$nocolor"
+			missing=1
+		else
+			echo -e "$green Found: $dep$nocolor"
 		fi
-
-	echo "Installing python Mako dependency (if missing) ..." $'\n'
-	pip install mako &> /dev/null
+	done
+	if [ "$missing" == "1" ]; then
+		echo "Please install missing dependencies" && exit 1
+	fi
+	pip install mako &> /dev/null || true
 }
 
-prepare_workdir(){
-	echo "Creating and entering to work directory ..." $'\n'
-	mkdir -p "$workdir" && cd "$_"
-
+prepare_ndk(){
+	echo "Preparing NDK ..."
+	cd "$workdir"
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		if [ ! -d "$ndkver" ]; then
-			echo "Downloading android-ndk from google server (~640 MB) ..." $'\n'
+			echo "Downloading android-ndk ..."
 			curl https://dl.google.com/android/repository/"$ndkver"-linux.zip --output "$ndkver"-linux.zip &> /dev/null
-			echo "Exracting android-ndk to a folder ..." $'\n'
+			echo "Exracting android-ndk ..."
 			unzip "$ndkver"-linux.zip  &> /dev/null
 		fi
-	else	
+	else
 		echo "Using android ndk from github image"
 	fi
-
-	if [ -d mesa ]; then
-		echo "Removing old mesa ..." $'\n'
-		rm -rf mesa
-	fi
-	
-	echo "Cloning mesa from Danil's fork..." $'\n'
-	git clone "$mesasrc"
-
-	cd mesa
-	
-	echo -e "${green}Switching to branch 'tu-newat-fixes'...${nocolor}"
-	git checkout tu-newat-fixes
-
-	commit_short=$(git rev-parse --short HEAD)
-	commit=$(git rev-parse HEAD)
-	mesa_version=$(cat VERSION | xargs)
-	version=$(awk -F'COMPLETE VK_MAKE_API_VERSION(|)' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
-	major=$(echo $version | cut -d "," -f 2 | xargs)
-	minor=$(echo $version | cut -d "," -f 3 | xargs)
-	patch=$(awk -F'VK_HEADER_VERSION |\n#define' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
-	vulkan_version="$major.$minor.$patch"
 }
 
-build_lib_for_android(){
+compile_mesa() {
+    local source_dir=$1
+    local build_dir_name=$2
+    local description=$3
+
+    echo -e "${green}--- Compiling: $description ---${nocolor}"
+    cd "$source_dir"
+
 	local ndk_root_path
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		ndk_root_path="$workdir/$ndkver"
@@ -99,11 +67,10 @@ build_lib_for_android(){
 	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-	echo "Creating meson cross file ..." $'\n'
-	cat <<EOF >"$workdir/mesa/android-aarch64"
+	local cross_file_path="$source_dir/android-aarch64-crossfile.txt"
+	cat <<EOF >"$cross_file_path"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
-# REMOVIDO: A flag -Dandroid-strict=false foi retirada
 c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
 cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
@@ -117,65 +84,167 @@ cpu = 'armv8'
 endian = 'little'
 EOF
 
-	echo "Generating build files ..." $'\n'
-	cd "$workdir/mesa"
-	meson setup build-android-aarch64 --cross-file "android-aarch64" -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir/meson_log"
+	echo "Generating build files for $description..."
+	meson setup --reconfigure "$build_dir_name" --cross-file "$cross_file_path" -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir/meson_log_$description"
 
-	echo "Compiling build files ..." $'\n'
-	ninja -C build-android-aarch64 2>&1 | tee "$workdir/ninja_log"
-}
+	echo "Compiling $description..."
+	ninja -C "$build_dir_name" 2>&1 | tee "$workdir/ninja_log_$description"
 
-port_lib_for_adrenotool(){
-	local compiled_lib="$workdir/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so"
+    local compiled_lib="$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
 	if [ ! -f "$compiled_lib" ]; then
-		echo -e "${red}Build failed: libvulkan_freedreno.so not found. Check compilation logs.${nocolor}"
+		echo -e "${red}Build failed for $description: libvulkan_freedreno.so not found.${nocolor}"
 		exit 1
 	fi
-	
-	echo "Using patchelf to match soname ..."  $'\n'
-	cp "$compiled_lib" "$workdir"
-	cd "$workdir"
-	patchelf --set-soname vulkan.adreno.so libvulkan_freedreno.so
-	mv libvulkan_freedreno.so vulkan.ad07XX.so
+    echo -e "${green}--- Finished Compiling: $description ---${nocolor}\n"
+    cd "$workdir"
+}
 
-	mkdir -p "$packagedir" && cd "$_"
+package_driver() {
+    local source_dir=$1
+    local build_dir_name=$2
+    local description_name=$3
+    local version_str=$4
+    local commit_hash_short=$5
+    local commit_hash_full=$6
+    local repo_url=$7
 
-	date=$(date +'%b %d, %Y')
-	
+    echo -e "${green}--- Packaging: $description_name ---${nocolor}"
+    local compiled_lib="$workdir/$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
+    local package_temp_dir="$workdir/package_temp_single" # Diretório temporário único
+    
+    local lib_final_name="vulkan.ad07XX.so" 
+    local soname="vulkan.adreno.so" 
+
+    # Nome do arquivo ZIP sem sufixo extra
+    local output_filename="turnip_$(date +'%Y%m%d')_${commit_hash_short}.zip"
+
+    mkdir -p "$package_temp_dir"
+    
+    cp "$compiled_lib" "$package_temp_dir/lib_temp.so"
+    cd "$package_temp_dir"
+    
+    patchelf --set-soname "$soname" lib_temp.so
+    mv lib_temp.so "$lib_final_name"
+
+	date_meta=$(date +'%b %d, %Y')
 	cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "Turnip - $date - $commit_short",
-  "description": "Compiled from Mesa (Danil's fork, tu-newat-fixes), Commit $commit_short",
+  "name": "Turnip ($description_name) - $date_meta - $commit_hash_short",
+  "description": "Compiled from $description_name, Commit $commit_hash_short",
   "author": "mesa-ci",
   "packageVersion": "1",
   "vendor": "Mesa",
-  "driverVersion": "$mesa_version/vk$vulkan_version",
+  "driverVersion": "$version_str",
   "minApi": 27,
-  "libraryName": "vulkan.ad07XX.so"
+  "libraryName": "$lib_final_name"
 }
 EOF
 
-	filename=turnip_"$(date +'%b-%d-%Y')"_"$commit_short"
-	echo "Copy necessary files from work directory ..." $'\n'
-	cp "$workdir"/vulkan.ad07XX.so "$packagedir"
-
-	echo "Packing files in to adrenotool package ..." $'\n'
-	cd "$packagedir"
-	zip -9 "$workdir"/"$filename".zip ./*
-
-	cd "$workdir"
-
-	echo "Turnip - $mesa_version - $date" > release
-	echo "${mesa_version}_${commit_short}" > tag
-	echo  $filename > filename
-	echo "### Build from Danil's fork (tu-newat-fixes)" > description
-	echo "### Base commit: [$commit_short](https://gitlab.freedesktop.org/Danil/mesa/-/commit/$commit)" >> description
-	
-	if ! [ -a "$workdir"/"$filename".zip ];
-		then echo -e "$red-Packing failed!$nocolor" && exit 1
-		else echo -e "$green-All done, you can take your zip from this folder;$nocolor" && echo "$workdir"/
+	echo "Packing $output_filename..."
+	zip -9 "$workdir/$output_filename" "$lib_final_name" meta.json
+    
+    if ! [ -f "$workdir/$output_filename" ]; then
+		echo -e "$red Packaging failed for $description_name! $nocolor" && exit 1
+	else
+		echo -e "$green Package ready: $workdir/$output_filename $nocolor"
 	fi
+
+    rm -rf "$package_temp_dir"
+    cd "$workdir"
+    echo -e "${green}--- Finished Packaging: $description_name ---${nocolor}\n"
 }
 
-run_all
+# --- Função ÚNICA de Build ---
+build_mesa_patched_dgmem_sp() {
+    local dir_name="mesa_patched_dgmem_sp"
+    local build_dir="build-patched-dgmem-sp"
+    local description="Mesa $mesa_tag_target (Patched: DGmemSP)"
+    echo -e "${green}=== Building $description ===${nocolor}"
+    git clone "$mesa_repo_main" "$dir_name"
+    cd "$dir_name"
+    
+    echo -e "${green}Checking out tag '$mesa_tag_target'...${nocolor}"
+    git checkout "$mesa_tag_target"
+    
+    echo "Creating Disable GMEM Single Prim patch file..."
+    cat << 'EOF' > "$workdir/0001-Disable-GMEM-in-single-prim-mode.patch"
+From 94a051bc7c78635617a1584a7accb94cc5b6ee7e Mon Sep 17 00:00:00 2001
+From: Dhruv Mark Collins <mark@igalia.com>
+Date: Tue, 28 Oct 2025 19:09:58 +0000
+Subject: [PATCH 1/2] Disable GMEM in single prim mode
+
+---
+ src/freedreno/vulkan/tu_autotune.cc | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/freedreno/vulkan/tu_autotune.cc b/src/freedreno/vulkan/tu_autotune.cc
+index 9d084349ca7..3c13572cad0 100644
+--- a/src/freedreno/vulkan/tu_autotune.cc
++++ b/src/freedreno/vulkan/tu_autotune.cc
+@@ -1695,8 +1695,8 @@ tu_autotune::get_optimal_mode(struct tu_cmd_buffer *cmd_buffer, rp_ctx_t *rp_ctx
+     * SINGLE_PRIM_MODE(FLUSH_PER_OVERLAP_AND_OVERWRITE) or even SINGLE_PRIM_MODE(FLUSH), then that should cause
+     * significantly increased SYSMEM bandwidth (though we haven't quantified it).
+     */
+-   if (rp_state->sysmem_single_prim_mode)
+-      return render_mode::GMEM;
++   // if (rp_state->sysmem_single_prim_mode)
++   //    return render_mode::GMEM;
+ 
+    /* If the user is using a fragment density map, then this will cause less FS invocations with GMEM, which has a
+     * hard-to-measure impact on performance because it depends on how heavy the FS is in addition to how many
+-- 
+2.49.0
+
+EOF
+
+    echo "Applying Disable GMEM Single Prim patch..."
+    if git apply "$workdir/0001-Disable-GMEM-in-single-prim-mode.patch"; then
+        echo -e "${green}Patch applied successfully!${nocolor}\n"
+    else
+        echo -e "${red}Failed to apply Disable GMEM Single Prim patch to tag $mesa_tag_target.${nocolor}"
+        exit 1 # Parar o script se o patch falhar
+    fi
+
+    commit_target=$(git rev-parse HEAD)
+    version_target="$mesa_tag_target"
+    cd ..
+    compile_mesa "$workdir/$dir_name" "$build_dir" "$description"
+    # Removido o sufixo "dgmem_sp" da chamada de package_driver
+    package_driver "$dir_name" "$build_dir" "" "$description" "$version_target" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_target" "$mesa_repo_main"
+}
+
+
+# --- Geração de Info para Release ---
+generate_release_info() {
+    echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
+    cd "$workdir"
+    local date_tag=$(date +'%Y%m%d')
+    local target_commit_short=$(git -C mesa_patched_dgmem_sp rev-parse --short HEAD)
+
+    echo "Mesa-${date_tag}-${target_commit_short}" > tag
+    echo "Turnip CI Build - ${date_tag} (DGmemSP Patch)" > release
+
+    echo "Automated Turnip CI build." > description
+    echo "" >> description
+    echo "### Build Details:" >> description
+    echo "**Mesa Base:** Tag \`$mesa_tag_target\`" >> description
+    echo "**Patch Applied:** Disable GMEM in single prim mode." >> description
+    echo "**Commit (base tag):** [${target_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_target})" >> description
+    
+    echo -e "${green}Release info generated.${nocolor}"
+}
+
+
+# --- Execução Principal ---
+check_deps
+# Cria o diretório de trabalho principal apenas uma vez
+mkdir -p "$workdir" 
+prepare_ndk
+
+# Executa apenas o build desejado
+build_mesa_patched_dgmem_sp
+
+generate_release_info
+
+echo -e "${green}Build completed successfully!${nocolor}"
