@@ -106,7 +106,6 @@ package_driver() {
     local commit_hash_short=$5
     local commit_hash_full=$6
     local repo_url=$7
-    # ADICIONADO: Sufixo para o nome do arquivo ZIP
     local output_suffix="dspm_dyn"
 
     echo -e "${green}--- Packaging: $description_name ---${nocolor}"
@@ -116,7 +115,6 @@ package_driver() {
     local lib_final_name="vulkan.ad07XX.so" 
     local soname="vulkan.adreno.so" 
 
-    # Nome do arquivo ZIP com sufixo
     local output_filename="turnip_$(date +'%Y%m%d')_${commit_hash_short}_${output_suffix}.zip"
 
     mkdir -p "$package_temp_dir"
@@ -128,10 +126,13 @@ package_driver() {
     mv lib_temp.so "$lib_final_name"
 
 	date_meta=$(date +'%b %d, %Y')
+	# --- ALTERADO: Nome simplificado para evitar problemas de caminho ---
+    local meta_name="Turnip-Danil-${commit_hash_short}-DSPM"
+    # --- FIM ALTERADO ---
 	cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "Turnip ($description_name) - $date_meta - $commit_hash_short",
+  "name": "$meta_name",
   "description": "Compiled from $description_name, Commit $commit_hash_short",
   "author": "mesa-ci",
   "packageVersion": "1",
@@ -156,8 +157,6 @@ EOF
     echo -e "${green}--- Finished Packaging: $description_name ---${nocolor}\n"
 }
 
-# --- Função ÚNICA de Build ---
-# Renomeada para clareza
 build_danil_patched_dspm_dyn() {
     local dir_name="mesa_danil_patched_dspm_dyn"
     local build_dir="build-danil-patched-dspm-dyn"
@@ -170,7 +169,6 @@ build_danil_patched_dspm_dyn() {
     echo -e "${green}Checking out branch '$target_branch'...${nocolor}"
     git checkout "$target_branch"
     
-    # ALTERADO: Conteúdo do patch
     echo "Creating $patch_file_name file..."
     cat << 'EOF' > "$workdir/$patch_file_name"
 From 997218fbf9e22e3b038df29bb4d82bc33e897bdd Mon Sep 17 00:00:00 2001
@@ -201,7 +199,6 @@ index bfb16340229..726b422577e 100644
 
 EOF
 
-    # ALTERADO: Aplica o novo patch
     echo "Applying $patch_file_name..."
     if git apply "$workdir/$patch_file_name"; then
         echo -e "${green}Patch applied successfully!${nocolor}\n"
@@ -214,28 +211,23 @@ EOF
     version_target=$(cat VERSION | xargs)
     cd ..
     compile_mesa "$workdir/$dir_name" "$build_dir" "$description"
-    # ALTERADO: Passa a descrição correta e o sufixo
     package_driver "$dir_name" "$build_dir" "$description" "$version_target" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_target" "$mesasrc"
 }
 
 
-# --- Geração de Info para Release ---
 generate_release_info() {
     echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
     local target_commit_short=$(git -C mesa_danil_patched_dspm_dyn rev-parse --short HEAD)
 
-    # Tag baseada na data e commit
     echo "Danil-${date_tag}-${target_commit_short}" > tag
-    # ALTERADO: Nome da release
     echo "Turnip CI Build - ${date_tag} (Danil's Fork + Disable SPM Dynamic Input Patch)" > release
 
     echo "Automated Turnip CI build." > description
     echo "" >> description
     echo "### Build Details:" >> description
     echo "**Base:** Danil's Mesa fork, branch \`$target_branch\`" >> description
-    # ALTERADO: Descrição do patch
     echo "**Patch Applied:** Disable single prim mode for dynamic input attachments." >> description
     echo "**Commit:** [${target_commit_short}](${mesasrc%.git}/-/commit/${commit_target})" >> description
     
@@ -248,8 +240,7 @@ check_deps
 mkdir -p "$workdir" 
 prepare_ndk
 
-# Executa apenas o build desejado
-build_danil_patched_dspm_dyn # Função renomeada
+build_danil_patched_dspm_dyn
 
 generate_release_info
 
