@@ -8,9 +8,10 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
-mesa_repo_main="https://gitlab.freedesktop.org/mesa/mesa.git"
-# Tag base para o patch
-mesa_tag_target="26.0.0"
+# ALTERADO: URL para o fork do Danil
+mesasrc="https://gitlab.freedesktop.org/Danil/mesa.git"
+# ALTERADO: Branch a ser usado
+target_branch="tu-newat-fixes"
 
 # --- Variáveis Globais ---
 commit_target=""
@@ -110,13 +111,13 @@ package_driver() {
 
     echo -e "${green}--- Packaging: $description_name ---${nocolor}"
     local compiled_lib="$workdir/$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
-    local package_temp_dir="$workdir/package_temp_single" # Diretório temporário único
+    local package_temp_dir="$workdir/package_temp_single"
     
     local lib_final_name="vulkan.ad07XX.so" 
     local soname="vulkan.adreno.so" 
 
-    # Nome do arquivo ZIP sem sufixo extra
-    local output_filename="turnip_$(date +'%Y%m%d')_${commit_hash_short}.zip"
+    # Nome do arquivo ZIP sem sufixo extra, mas indicando o patch
+    local output_filename="turnip_$(date +'%Y%m%d')_${commit_hash_short}_dgmem_sp.zip"
 
     mkdir -p "$package_temp_dir"
     
@@ -156,16 +157,17 @@ EOF
 }
 
 # --- Função ÚNICA de Build ---
-build_mesa_patched_dgmem_sp() {
-    local dir_name="mesa_patched_dgmem_sp"
-    local build_dir="build-patched-dgmem-sp"
-    local description="Mesa $mesa_tag_target (Patched: DGmemSP)"
+build_danil_patched_dgmem_sp() {
+    local dir_name="mesa_danil_patched_dgmem_sp"
+    local build_dir="build-danil-patched-dgmem-sp"
+    local description="Danil's Fork $target_branch (Patched: DGmemSP)"
     echo -e "${green}=== Building $description ===${nocolor}"
-    git clone "$mesa_repo_main" "$dir_name"
+    git clone "$mesasrc" "$dir_name"
     cd "$dir_name"
     
-    echo -e "${green}Checking out tag '$mesa_tag_target'...${nocolor}"
-    git checkout "$mesa_tag_target"
+    # ALTERADO: Faz checkout do branch do Danil
+    echo -e "${green}Checking out branch '$target_branch'...${nocolor}"
+    git checkout "$target_branch"
     
     echo "Creating Disable GMEM Single Prim patch file..."
     cat << 'EOF' > "$workdir/0001-Disable-GMEM-in-single-prim-mode.patch"
@@ -202,16 +204,16 @@ EOF
     if git apply "$workdir/0001-Disable-GMEM-in-single-prim-mode.patch"; then
         echo -e "${green}Patch applied successfully!${nocolor}\n"
     else
-        echo -e "${red}Failed to apply Disable GMEM Single Prim patch to tag $mesa_tag_target.${nocolor}"
-        exit 1 # Parar o script se o patch falhar
+        echo -e "${red}Failed to apply Disable GMEM Single Prim patch to branch $target_branch.${nocolor}"
+        exit 1
     fi
 
     commit_target=$(git rev-parse HEAD)
-    version_target="$mesa_tag_target"
+    version_target=$(cat VERSION | xargs) # Pega a versão do branch
     cd ..
     compile_mesa "$workdir/$dir_name" "$build_dir" "$description"
-    # Removido o sufixo "dgmem_sp" da chamada de package_driver
-    package_driver "$dir_name" "$build_dir" "" "$description" "$version_target" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_target" "$mesa_repo_main"
+    # Adicionado sufixo "dgmem_sp" para indicar o patch
+    package_driver "$dir_name" "$build_dir" "dgmem_sp" "$description" "$version_target" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_target" "$mesasrc"
 }
 
 
@@ -220,17 +222,18 @@ generate_release_info() {
     echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
-    local target_commit_short=$(git -C mesa_patched_dgmem_sp rev-parse --short HEAD)
+    local target_commit_short=$(git -C mesa_danil_patched_dgmem_sp rev-parse --short HEAD)
 
-    echo "Mesa-${date_tag}-${target_commit_short}" > tag
-    echo "Turnip CI Build - ${date_tag} (DGmemSP Patch)" > release
+    # Tag baseada na data e commit
+    echo "Danil-${date_tag}-${target_commit_short}" > tag
+    echo "Turnip CI Build - ${date_tag} (Danil's Fork + DGmemSP Patch)" > release
 
     echo "Automated Turnip CI build." > description
     echo "" >> description
     echo "### Build Details:" >> description
-    echo "**Mesa Base:** Tag \`$mesa_tag_target\`" >> description
+    echo "**Base:** Danil's Mesa fork, branch \`$target_branch\`" >> description
     echo "**Patch Applied:** Disable GMEM in single prim mode." >> description
-    echo "**Commit (base tag):** [${target_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_target})" >> description
+    echo "**Commit:** [${target_commit_short}](${mesasrc%.git}/-/commit/${commit_target})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
 }
@@ -238,12 +241,11 @@ generate_release_info() {
 
 # --- Execução Principal ---
 check_deps
-# Cria o diretório de trabalho principal apenas uma vez
 mkdir -p "$workdir" 
 prepare_ndk
 
 # Executa apenas o build desejado
-build_mesa_patched_dgmem_sp
+build_danil_patched_dgmem_sp
 
 generate_release_info
 
