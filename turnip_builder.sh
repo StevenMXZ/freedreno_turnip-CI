@@ -3,26 +3,23 @@ green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
 
-# --- Config ---
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
 mesa_repo_main="https://gitlab.freedesktop.org/mesa/mesa.git"
 autotuner_mr_num="37802"
-mesa_tag_patched="26.0.0"
+mesa_tag_oneui="26.0.0"
 
-# --- Variáveis Globais ---
 commit_main=""
-commit_autotuner_mr=""
-commit_patched=""
+commit_dgmem_sp=""
+commit_oneui=""
 version_main=""
-version_autotuner_mr=""
-version_patched=""
+version_dgmem_sp=""
+version_oneui=""
 
 clear
 
-# --- Funções Auxiliares ---
 check_deps(){
 	echo "Checking system dependencies ..."
 	for dep in $deps; do
@@ -103,11 +100,10 @@ EOF
     cd "$workdir"
 }
 
-# --- FUNÇÃO package_driver REVERTIDA PARA NOMES .so PADRÃO ---
 package_driver() {
     local source_dir=$1
     local build_dir_name=$2
-    local output_suffix=$3 # main, autotuner_mr, oneui
+    local output_suffix=$3
     local description_name=$4
     local version_str=$5
     local commit_hash_short=$6
@@ -118,10 +114,8 @@ package_driver() {
     local compiled_lib="$workdir/$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
     local package_temp_dir="$workdir/package_temp_${output_suffix}"
     
-    # --- REVERTIDO: Usar nome padrão para o .so ---
     local lib_final_name="vulkan.ad07XX.so" 
-    local soname="vulkan.adreno.so" # Soname esperado pelo sistema/ferramentas
-    # --- FIM REVERTIDO ---
+    local soname="vulkan.adreno.so" 
 
     local filename_base="turnip_$(date +'%Y%m%d')_${commit_hash_short}"
     local output_filename
@@ -133,14 +127,11 @@ package_driver() {
 
     mkdir -p "$package_temp_dir"
     
-    # Copia a biblioteca original
     cp "$compiled_lib" "$package_temp_dir/lib_temp.so"
     cd "$package_temp_dir"
     
-    # --- REVERTIDO: Patchelf e rename para nomes padrão ---
     patchelf --set-soname "$soname" lib_temp.so
     mv lib_temp.so "$lib_final_name"
-    # --- FIM REVERTIDO ---
 
 	date_meta=$(date +'%b %d, %Y')
 	cat <<EOF >"meta.json"
@@ -153,12 +144,11 @@ package_driver() {
   "vendor": "Mesa",
   "driverVersion": "$version_str",
   "minApi": 27,
-  "libraryName": "$lib_final_name" # Nome do arquivo .so dentro do zip
+  "libraryName": "$lib_final_name"
 }
 EOF
 
 	echo "Packing $output_filename..."
-	# Zipa o arquivo .so com o nome padrão
 	zip -9 "$workdir/$output_filename" "$lib_final_name" meta.json
     
     if ! [ -f "$workdir/$output_filename" ]; then
@@ -171,8 +161,6 @@ EOF
     cd "$workdir"
     echo -e "${green}--- Finished Packaging: $description_name ---${nocolor}\n"
 }
-
-# --- Funções de Build Específicas ---
 
 build_mesa_main() {
     local dir_name="mesa_main"
@@ -187,68 +175,91 @@ build_mesa_main() {
     package_driver "$dir_name" "$build_dir" "main" "Mesa Main" "$version_main" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_main" "$mesa_repo_main"
 }
 
-build_mesa_main_autotuner_mr() {
-    local dir_name="mesa_autotuner_mr"
-    local build_dir="build-autotuner-mr"
-    echo -e "${green}=== Building Mesa Main + Autotuner MR !${autotuner_mr_num} ===${nocolor}"
-    git clone "$mesa_repo_main" "$dir_name"
+build_mesa_main_dgmem_sp() {
+    local dir_name="mesa_dgmem_sp"
+    local build_dir="build-dgmem-sp"
+    echo -e "${green}=== Building Mesa Main + Disable GMEM Single Prim Patch ===${nocolor}"
+    git clone --depth=1 "$mesa_repo_main" "$dir_name"
     cd "$dir_name"
     
-	echo -e "${green}Configuring local git identity for merge...${nocolor}"
-	git config user.name "CI Builder"
-	git config user.email "ci@builder.com"
-	
-	echo -e "${green}Fetching Merge Request !${autotuner_mr_num}...${nocolor}"
-	git fetch origin "refs/merge-requests/${autotuner_mr_num}/head"
-	echo -e "${green}Merging fetched MR into current branch...${nocolor}"
-	if git merge --no-edit FETCH_HEAD; then
-		echo -e "${green}Merge successful!${nocolor}\n"
-	else
-		echo -e "${red}Merge failed for MR !${autotuner_mr_num}. Conflicts might need manual resolution.${nocolor}"
-        echo -e "${yellow}Skipping Autotuner MR build due to merge failure.${nocolor}"
-        cd ..
-        commit_autotuner_mr="" 
-        version_autotuner_mr="N/A (skipped)"
-        return 
-	fi
+    echo "Creating Disable GMEM Single Prim patch file..."
+    cat << 'EOF' > "$workdir/0001-Disable-GMEM-in-single-prim-mode.patch"
+From 94a051bc7c78635617a1584a7accb94cc5b6ee7e Mon Sep 17 00:00:00 2001
+From: Dhruv Mark Collins <mark@igalia.com>
+Date: Tue, 28 Oct 2025 19:09:58 +0000
+Subject: [PATCH 1/2] Disable GMEM in single prim mode
 
-    commit_autotuner_mr=$(git rev-parse HEAD)
-    version_autotuner_mr=$(cat VERSION | xargs)
+---
+ src/freedreno/vulkan/tu_autotune.cc | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/freedreno/vulkan/tu_autotune.cc b/src/freedreno/vulkan/tu_autotune.cc
+index 9d084349ca7..3c13572cad0 100644
+--- a/src/freedreno/vulkan/tu_autotune.cc
++++ b/src/freedreno/vulkan/tu_autotune.cc
+@@ -1695,8 +1695,8 @@ tu_autotune::get_optimal_mode(struct tu_cmd_buffer *cmd_buffer, rp_ctx_t *rp_ctx
+     * SINGLE_PRIM_MODE(FLUSH_PER_OVERLAP_AND_OVERWRITE) or even SINGLE_PRIM_MODE(FLUSH), then that should cause
+     * significantly increased SYSMEM bandwidth (though we haven't quantified it).
+     */
+-   if (rp_state->sysmem_single_prim_mode)
+-      return render_mode::GMEM;
++   // if (rp_state->sysmem_single_prim_mode)
++   //    return render_mode::GMEM;
+ 
+    /* If the user is using a fragment density map, then this will cause less FS invocations with GMEM, which has a
+     * hard-to-measure impact on performance because it depends on how heavy the FS is in addition to how many
+-- 
+2.49.0
+
+EOF
+
+    echo "Applying Disable GMEM Single Prim patch..."
+    if git apply "$workdir/0001-Disable-GMEM-in-single-prim-mode.patch"; then
+        echo -e "${green}Patch applied successfully!${nocolor}\n"
+    else
+        echo -e "${red}Failed to apply Disable GMEM Single Prim patch.${nocolor}"
+        cd ..
+        commit_dgmem_sp=""
+        version_dgmem_sp="N/A (skipped)"
+        return
+    fi
+
+    commit_dgmem_sp=$(git rev-parse HEAD)
+    version_dgmem_sp=$(cat VERSION | xargs)
     cd ..
-    compile_mesa "$workdir/$dir_name" "$build_dir" "Mesa_Autotuner_MR"
-    package_driver "$dir_name" "$build_dir" "autotuner_mr" "Mesa Main + Autotuner MR" "$version_autotuner_mr" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_autotuner_mr" "$mesa_repo_main"
+    compile_mesa "$workdir/$dir_name" "$build_dir" "Mesa_DGmemSP"
+    package_driver "$dir_name" "$build_dir" "dgmem_sp" "Mesa Main (Patched: DGmemSP)" "$version_dgmem_sp" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_dgmem_sp" "$mesa_repo_main"
 }
 
-build_mesa_patched() {
-    local dir_name="mesa_patched"
-    local build_dir="build-patched"
-    echo -e "${green}=== Building Patched Mesa ($mesa_tag_patched) ===${nocolor}"
+build_mesa_oneui_patched() {
+    local dir_name="mesa_oneui"
+    local build_dir="build-oneui"
+    echo -e "${green}=== Building Patched Mesa ($mesa_tag_oneui) for OneUI ===${nocolor}"
     git clone "$mesa_repo_main" "$dir_name"
     cd "$dir_name"
-    git checkout "$mesa_tag_patched"
+    git checkout "$mesa_tag_oneui"
     
-    echo "Applying patch: enable_tp_ubwc_flag_hint = True..."
+    echo "Applying OneUI patch: enable_tp_ubwc_flag_hint = True..."
 	sed -i 's/enable_tp_ubwc_flag_hint = False,/enable_tp_ubwc_flag_hint = True,/' src/freedreno/common/freedreno_devices.py
 	echo "Patch applied."
 
-    commit_patched=$(git rev-parse HEAD)
-    version_patched="$mesa_tag_patched"
+    commit_oneui=$(git rev-parse HEAD)
+    version_oneui="$mesa_tag_oneui"
     cd ..
-    compile_mesa "$workdir/$dir_name" "$build_dir" "Mesa_Patched"
-    package_driver "$dir_name" "$build_dir" "oneui" "Mesa $mesa_tag_patched (Patched: OneUI)" "$version_patched" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_patched" "$mesa_repo_main"
+    compile_mesa "$workdir/$dir_name" "$build_dir" "Mesa_OneUI"
+    package_driver "$dir_name" "$build_dir" "oneui" "Mesa $mesa_tag_oneui (Patched: OneUI)" "$version_oneui" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_oneui" "$mesa_repo_main"
 }
 
-# --- Geração de Info para Release ---
 generate_release_info() {
     echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
     local main_commit_short=$(git -C mesa_main rev-parse --short HEAD)
-    local autotuner_commit_short=""
-    if [ -d "mesa_autotuner_mr" ] && [ -n "$commit_autotuner_mr" ]; then
-       autotuner_commit_short=$(git -C mesa_autotuner_mr rev-parse --short HEAD)
+    local dgmem_sp_commit_short=""
+    if [ -d "mesa_dgmem_sp" ] && [ -n "$commit_dgmem_sp" ]; then
+       dgmem_sp_commit_short=$(git -C mesa_dgmem_sp rev-parse --short HEAD)
     fi
-    local patched_commit_short=$(git -C mesa_patched rev-parse --short HEAD)
+    local oneui_commit_short=$(git -C mesa_oneui rev-parse --short HEAD)
 
     echo "Mesa-${date_tag}-${main_commit_short}" > tag
     echo "Turnip CI Build - ${date_tag}" > release
@@ -264,34 +275,31 @@ generate_release_info() {
     echo "   - Commit: [${main_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_main})" >> description
     echo "" >> description
     
-    echo "**2. Main + New Autotuner MR (turnip\_autotuner\_mr\_<date>\_${autotuner_commit_short}.zip):**" >> description
-    echo "   - Build from latest Mesa main branch + Merged Request !${autotuner_mr_num} (new autotuner logic)." >> description
-    if [ -n "$autotuner_commit_short" ]; then
-        echo "   - Version: \`$version_autotuner_mr\`" >> description
-        echo "   - Merged Commit: [${autotuner_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_autotuner_mr})" >> description
+    echo "**2. Main + DGmemSP Patch (turnip\_dgmem\_sp\_<date>\_${dgmem_sp_commit_short}.zip):**" >> description
+    echo "   - Build from latest Mesa main branch + Patch to disable GMEM in single prim mode." >> description
+    if [ -n "$dgmem_sp_commit_short" ]; then
+        echo "   - Version: \`$version_dgmem_sp\`" >> description
+        echo "   - Base Commit: [${dgmem_sp_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_dgmem_sp})" >> description
     else
-        echo "   - *Build skipped due to merge conflicts.*" >> description
+        echo "   - *Build skipped due to patch failure.*" >> description
     fi
     echo "" >> description
     
-    echo "**3. Turnip OneUI Patched (turnip\_oneui\_<date>\_${patched_commit_short}.zip):**" >> description
-    echo "   - Based on Mesa tag \`$version_patched\`, patched to enable \`enable_tp_ubwc_flag_hint=True\`." >> description
+    echo "**3. Turnip OneUI Patched (turnip\_oneui\_<date>\_${oneui_commit_short}.zip):**" >> description
+    echo "   - Based on Mesa tag \`$version_oneui\`, patched to enable \`enable_tp_ubwc_flag_hint=True\`." >> description
     echo "   - Aims for better compatibility on certain Adreno devices running Samsung OneUI." >> description
-    echo "   - Commit (base): [${patched_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_patched})" >> description
+    echo "   - Commit (base): [${oneui_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_oneui})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
 }
 
-
-# --- Execução Principal ---
 check_deps
-# Cria o diretório de trabalho principal uma vez
-mkdir -p "$workdir" 
+mkdir -p "$workdir"
 prepare_ndk
 
 build_mesa_main
-build_mesa_main_autotuner_mr
-build_mesa_patched
+build_mesa_main_dgmem_sp
+build_mesa_oneui_patched
 
 generate_release_info
 
