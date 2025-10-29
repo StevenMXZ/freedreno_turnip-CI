@@ -8,7 +8,10 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
-mesa_repo_main="https://gitlab.freedesktop.org/mesa/mesa.git"
+# ALTERADO: URL de volta para o fork do Danil
+mesasrc="https://gitlab.freedesktop.org/Danil/mesa.git"
+# ALTERADO: Branch a ser compilado
+target_branch="tu-newat-fixes"
 
 # --- Variáveis Globais ---
 commit_target=""
@@ -51,27 +54,31 @@ prepare_ndk(){
 }
 
 prepare_mesa_source() {
-    echo "Preparing Mesa source directory..."
+    echo "Preparing Mesa source directory (Danil's Fork)..."
     cd "$workdir"
     if [ -d mesa ]; then
 		echo "Removing old Mesa ..."
 		rm -rf mesa
 	fi
     
-    echo "Cloning main Mesa repository..."
-	# Clone raso é suficiente agora, já que não há merge
-	git clone --depth=1 "$mesa_repo_main" mesa
+    echo "Cloning Danil's Mesa repository..."
+	# Clone completo para permitir checkout de branch
+	git clone "$mesasrc" mesa
 	cd mesa
+
+    # Checkout para o branch desejado
+    echo -e "${green}Checking out branch '$target_branch'...${nocolor}"
+    git checkout "$target_branch"
 
     commit_target=$(git rev-parse HEAD)
     version_target=$(cat VERSION | xargs)
-    cd "$workdir"
+    cd "$workdir" # Voltar para o diretório principal
 }
 
 compile_mesa() {
     local source_dir="$workdir/mesa"
     local build_dir_name="build"
-    local description="Mesa Main Branch"
+    local description="Danil's Fork ($target_branch)"
 
     echo -e "${green}--- Compiling: $description ---${nocolor}"
     cd "$source_dir"
@@ -120,11 +127,11 @@ EOF
 package_driver() {
     local source_dir="$workdir/mesa"
     local build_dir_name="build"
-    local description_name="Mesa Main Branch"
+    local description_name="Danil's Fork ($target_branch)" # Descrição atualizada
     local version_str=$version_target
     local commit_hash_short=$(git -C $source_dir rev-parse --short HEAD)
     local commit_hash_full=$commit_target
-    local repo_url=$mesa_repo_main
+    local repo_url=$mesasrc # URL do fork do Danil
 
     echo -e "${green}--- Packaging: $description_name ---${nocolor}"
     local compiled_lib="$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
@@ -133,7 +140,7 @@ package_driver() {
     local lib_final_name="vulkan.ad07XX.so" 
     local soname="vulkan.adreno.so" 
 
-    # Nome do arquivo ZIP sem sufixo
+    # Nome do arquivo ZIP sem sufixo extra
     local output_filename="turnip_$(date +'%Y%m%d')_${commit_hash_short}.zip"
 
     mkdir -p "$package_temp_dir"
@@ -145,7 +152,7 @@ package_driver() {
     mv lib_temp.so "$lib_final_name"
 
 	date_meta=$(date +'%b %d, %Y')
-    local meta_name="Turnip-Main-${commit_hash_short}"
+    local meta_name="Turnip-Danil-${commit_hash_short}" # Nome curto atualizado
 	cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
@@ -180,14 +187,15 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
     local target_commit_short=$(git -C mesa rev-parse --short HEAD)
 
-    echo "Mesa-Main-${date_tag}-${target_commit_short}" > tag
-    echo "Turnip CI Build - ${date_tag} (Main Branch)" > release
+    # Tag baseada na data e commit
+    echo "Danil-${date_tag}-${target_commit_short}" > tag
+    echo "Turnip CI Build - ${date_tag} (Danil's Fork)" > release
 
-    echo "Automated Turnip CI build from Mesa main branch." > description
+    echo "Automated Turnip CI build from Danil's Mesa fork." > description
     echo "" >> description
     echo "### Build Details:" >> description
-    echo "**Base:** Mesa main branch" >> description
-    echo "**Commit:** [${target_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_target})" >> description
+    echo "**Base:** Danil's Mesa fork, branch \`$target_branch\`" >> description
+    echo "**Commit:** [${target_commit_short}](${repo_url%.git}/-/commit/${commit_target})" >> description # Usa repo_url para link correto
     
     echo -e "${green}Release info generated.${nocolor}"
 }
