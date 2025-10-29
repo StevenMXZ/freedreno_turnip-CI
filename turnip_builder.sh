@@ -8,8 +8,8 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
-mesasrc="https://gitlab.freedesktop.org/Danil/mesa.git"
-target_branch="tu-newat-fixes"
+mesa_repo_main="https://gitlab.freedesktop.org/mesa/mesa.git"
+autotuner_mr_num="37802"
 
 # --- Variáveis Globais ---
 commit_target=""
@@ -49,10 +49,45 @@ prepare_ndk(){
 	fi
 }
 
+prepare_mesa_source() {
+    echo "Preparing Mesa source directory..."
+    cd "$workdir"
+    if [ -d mesa ]; then
+		echo "Removing old Mesa ..."
+		rm -rf mesa
+	fi
+    
+    echo "Cloning main Mesa repository..."
+	# Clone completo para permitir merge
+	git clone "$mesa_repo_main" mesa
+	cd mesa
+
+    # Configurar identidade local para o Git, necessária para o merge
+	echo -e "${green}Configuring local git identity for merge...${nocolor}"
+	git config user.name "CI Builder"
+	git config user.email "ci@builder.com"
+	
+	# Fetch e merge do MR Autotuner
+	echo -e "${green}Fetching Merge Request !${autotuner_mr_num}...${nocolor}"
+	git fetch origin "refs/merge-requests/${autotuner_mr_num}/head"
+	echo -e "${green}Merging fetched MR !${autotuner_mr_num} into main branch...${nocolor}"
+	if git merge --no-edit FETCH_HEAD; then
+		echo -e "${green}Merge successful!${nocolor}\n"
+	else
+		echo -e "${red}Merge failed for MR !${autotuner_mr_num}. Conflicts might need manual resolution.${nocolor}"
+        # Parar o script se o merge falhar
+        exit 1 
+	fi
+
+    commit_target=$(git rev-parse HEAD)
+    version_target=$(cat VERSION | xargs)
+    cd "$workdir" # Voltar para o diretório principal
+}
+
 compile_mesa() {
-    local source_dir=$1
-    local build_dir_name=$2
-    local description=$3
+    local source_dir="$workdir/mesa"
+    local build_dir_name="build" # Nome de build simples
+    local description="Mesa Main + Autotuner MR !${autotuner_mr_num}"
 
     echo -e "${green}--- Compiling: $description ---${nocolor}"
     cd "$source_dir"
@@ -84,14 +119,14 @@ endian = 'little'
 EOF
 
 	echo "Generating build files for $description..."
-	meson setup --reconfigure "$build_dir_name" --cross-file "$cross_file_path" -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir/meson_log_$description"
+	meson setup --reconfigure "$build_dir_name" --cross-file "$cross_file_path" -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir/meson_log"
 
 	echo "Compiling $description..."
-	ninja -C "$build_dir_name" 2>&1 | tee "$workdir/ninja_log_$description"
+	ninja -C "$build_dir_name" 2>&1 | tee "$workdir/ninja_log"
 
     local compiled_lib="$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
 	if [ ! -f "$compiled_lib" ]; then
-		echo -e "${red}Build failed for $description: libvulkan_freedreno.so not found.${nocolor}"
+		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
 		exit 1
 	fi
     echo -e "${green}--- Finished Compiling: $description ---${nocolor}\n"
@@ -99,18 +134,17 @@ EOF
 }
 
 package_driver() {
-    local source_dir=$1
-    local build_dir_name=$2
-    local description_name=$3
-    local version_str=$4
-    local commit_hash_short=$5
-    local commit_hash_full=$6
-    local repo_url=$7
-    # ALTERADO: Sufixo para o nome do arquivo ZIP
-    local output_suffix="log_at"
+    local source_dir="$workdir/mesa"
+    local build_dir_name="build"
+    local description_name="Mesa Main + Autotuner MR !${autotuner_mr_num}"
+    local version_str=$version_target
+    local commit_hash_short=$(git -C $source_dir rev-parse --short HEAD)
+    local commit_hash_full=$commit_target
+    local repo_url=$mesa_repo_main
+    local output_suffix="autotuner_mr" # Sufixo para o zip
 
     echo -e "${green}--- Packaging: $description_name ---${nocolor}"
-    local compiled_lib="$workdir/$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
+    local compiled_lib="$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
     local package_temp_dir="$workdir/package_temp_single"
     
     local lib_final_name="vulkan.ad07XX.so" 
@@ -128,7 +162,7 @@ package_driver() {
     mv lib_temp.so "$lib_final_name"
 
 	date_meta=$(date +'%b %d, %Y')
-    local meta_name="Turnip-Danil-${commit_hash_short}-LogAT" # Nome curto para meta.json
+    local meta_name="Turnip-Main-${commit_hash_short}-AutotunerMR" # Nome curto para meta.json
 	cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
@@ -157,123 +191,22 @@ EOF
     echo -e "${green}--- Finished Packaging: $description_name ---${nocolor}\n"
 }
 
-# --- Função ÚNICA de Build ---
-# Renomeada para clareza
-build_danil_patched_log_at() {
-    local dir_name="mesa_danil_patched_log_at"
-    local build_dir="build-danil-patched-log-at"
-    local description="Danil's Fork $target_branch (Patched: Log AT Mode)"
-    # ALTERADO: Nome do arquivo patch
-    local patch_file_name="0001-Log-AT-forced-prim-mode.patch"
-    echo -e "${green}=== Building $description ===${nocolor}"
-    git clone "$mesasrc" "$dir_name"
-    cd "$dir_name"
-    
-    echo -e "${green}Checking out branch '$target_branch'...${nocolor}"
-    git checkout "$target_branch"
-    
-    # ALTERADO: Conteúdo do patch
-    echo "Creating $patch_file_name file..."
-    cat << 'EOF' > "$workdir/$patch_file_name"
-From cda5eea32ce03e297d607ae3a2a2e589c83f0504 Mon Sep 17 00:00:00 2001
-From: Dhruv Mark Collins <mark@igalia.com>
-Date: Tue, 28 Oct 2025 21:54:34 +0000
-Subject: [PATCH] Log AT forced + prim mode
-
----
- src/freedreno/vulkan/tu_autotune.cc | 9 ++++++---
- src/freedreno/vulkan/tu_pipeline.cc | 7 ++++++-
- 2 files changed, 12 insertions(+), 4 deletions(-)
-
-diff --git a/src/freedreno/vulkan/tu_autotune.cc b/src/freedreno/vulkan/tu_autotune.cc
-index 9d084349ca7..62a16e08318 100644
---- a/src/freedreno/vulkan/tu_autotune.cc
-+++ b/src/freedreno/vulkan/tu_autotune.cc
-@@ -1695,17 +1695,20 @@ tu_autotune::get_optimal_mode(struct tu_cmd_buffer *cmd_buffer, rp_ctx_t *rp_ctx
-     * SINGLE_PRIM_MODE(FLUSH_PER_OVERLAP_AND_OVERWRITE) or even SINGLE_PRIM_MODE(FLUSH), then that should cause
-     * significantly increased SYSMEM bandwidth (though we haven't quantified it).
-     */
--   if (rp_state->sysmem_single_prim_mode)
-+   if (rp_state->sysmem_single_prim_mode) {
-+      mesa_loge("Using GMEM due to SINGLE_PRIM_MODE(FLUSH[_PER_OVERLAP_AND_OVERWRITE]) in subpass");
-       return render_mode::GMEM;
-+   }
- 
-    /* If the user is using a fragment density map, then this will cause less FS invocations with GMEM, which has a
-     * hard-to-measure impact on performance because it depends on how heavy the FS is in addition to how many
-     * invocations there were and the density. Let's assume the user knows what they're doing when they added the map,
-     * because if SYSMEM is actually faster then they could've just not used the fragment density map.
-     */
--   if (pass->has_fdm)
-+   if (pass->has_fdm) {
-+      mesa_loge("Using GMEM due to fragment density map usage");
-       return render_mode::GMEM;
--
-+   }
-    /* SYSMEM is always a safe default mode when we can't fully engage the autotuner. From testing, we know that for an
-     * incorrect decision towards SYSMEM tends to be far less impactful than an incorrect decision towards GMEM, which
-     * can cause significant performance issues.
-diff --git a/src/freedreno/vulkan/tu_pipeline.cc b/src/freedreno/vulkan/tu_pipeline.cc
-index bfb16340229..4c6ee7c5e35 100644
---- a/src/freedreno/vulkan/tu_pipeline.cc
-+++ b/src/freedreno/vulkan/tu_pipeline.cc
-@@ -3571,8 +3571,13 @@ tu6_emit_prim_mode_sysmem(struct tu_cs *cs,
-        fs->fs.dynamic_input_attachments_used) ?
-       FLUSH_PER_OVERLAP_AND_OVERWRITE : NO_FLUSH;
- 
--   if (sysmem_prim_mode == FLUSH_PER_OVERLAP_AND_OVERWRITE)
-+   if (sysmem_prim_mode == FLUSH_PER_OVERLAP_AND_OVERWRITE) {
-+      mesa_loge("Enabling sysmem single prim mode due to %s",
-+                raster_order_attachment_access ? "raster order attachment access" :
-+                feedback_loops ? "attachment feedback loops" :
-+                "dynamic input attachments");
-       *sysmem_single_prim_mode = true;
-+   }
- 
-    tu_cs_emit_regs(cs, A6XX_GRAS_SC_CNTL(.ccusinglecachelinesize = 2,
-                                          .single_prim_mode = sysmem_prim_mode));
--- 
-2.49.0
-
-EOF
-
-    # ALTERADO: Aplica o novo patch
-    echo "Applying $patch_file_name..."
-    if git apply "$workdir/$patch_file_name"; then
-        echo -e "${green}Patch applied successfully!${nocolor}\n"
-    else
-        echo -e "${red}Failed to apply $patch_file_name to branch $target_branch.${nocolor}"
-        exit 1
-    fi
-
-    commit_target=$(git rev-parse HEAD)
-    version_target=$(cat VERSION | xargs)
-    cd ..
-    compile_mesa "$workdir/$dir_name" "$build_dir" "$description"
-    # ALTERADO: Passa a descrição correta e o sufixo
-    package_driver "$dir_name" "$build_dir" "$description" "$version_target" "$(git -C $dir_name rev-parse --short HEAD)" "$commit_target" "$mesasrc"
-}
-
-
-# --- Geração de Info para Release ---
 generate_release_info() {
     echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
-    local target_commit_short=$(git -C mesa_danil_patched_log_at rev-parse --short HEAD)
+    local target_commit_short=$(git -C mesa rev-parse --short HEAD)
 
     # Tag baseada na data e commit
-    echo "Danil-${date_tag}-${target_commit_short}" > tag
-    # ALTERADO: Nome da release
-    echo "Turnip CI Build - ${date_tag} (Danil's Fork + Log AT Mode Patch)" > release
+    echo "Mesa-Main-MR${autotuner_mr_num}-${date_tag}-${target_commit_short}" > tag
+    echo "Turnip CI Build - ${date_tag} (Main + Autotuner MR !${autotuner_mr_num})" > release
 
     echo "Automated Turnip CI build." > description
     echo "" >> description
     echo "### Build Details:" >> description
-    echo "**Base:** Danil's Mesa fork, branch \`$target_branch\`" >> description
-    # ALTERADO: Descrição do patch
-    echo "**Patch Applied:** Add logging for Autotuner forced modes and single prim mode." >> description
-    echo "**Commit:** [${target_commit_short}](${mesasrc%.git}/-/commit/${commit_target})" >> description
+    echo "**Base:** Mesa main branch" >> description
+    echo "**Merged:** Merge Request !${autotuner_mr_num} (new autotuner logic)." >> description
+    echo "**Commit:** [${target_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_target})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
 }
@@ -281,12 +214,12 @@ generate_release_info() {
 
 # --- Execução Principal ---
 check_deps
+# Cria o diretório de trabalho principal apenas uma vez
 mkdir -p "$workdir" 
 prepare_ndk
-
-# Executa apenas o build desejado
-build_danil_patched_log_at # Função renomeada
-
+prepare_mesa_source
+compile_mesa
+package_driver
 generate_release_info
 
 echo -e "${green}Build completed successfully!${nocolor}"
