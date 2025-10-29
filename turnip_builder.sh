@@ -8,10 +8,10 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
-# ALTERADO: URL de volta para o fork do Danil
-mesasrc="https://gitlab.freedesktop.org/Danil/mesa.git"
+# ALTERADO: URL para o fork do PixelyIon
+mesasrc="https://gitlab.freedesktop.org/PixelyIon/mesa.git"
 # ALTERADO: Branch a ser compilado
-target_branch="tu-newat-fixes"
+target_branch="tu-newat"
 
 # --- Variáveis Globais ---
 commit_target=""
@@ -38,7 +38,6 @@ check_deps(){
 
 prepare_ndk(){
 	echo "Preparing NDK ..."
-	# Cria o diretório de trabalho principal aqui se não existir
 	mkdir -p "$workdir"
 	cd "$workdir"
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
@@ -54,31 +53,30 @@ prepare_ndk(){
 }
 
 prepare_mesa_source() {
-    echo "Preparing Mesa source directory (Danil's Fork)..."
+    echo "Preparing Mesa source directory (PixelyIon's Fork)..."
     cd "$workdir"
     if [ -d mesa ]; then
 		echo "Removing old Mesa ..."
 		rm -rf mesa
 	fi
     
-    echo "Cloning Danil's Mesa repository..."
-	# Clone completo para permitir checkout de branch
+    echo "Cloning PixelyIon's Mesa repository..."
 	git clone "$mesasrc" mesa
 	cd mesa
 
-    # Checkout para o branch desejado
     echo -e "${green}Checking out branch '$target_branch'...${nocolor}"
     git checkout "$target_branch"
 
     commit_target=$(git rev-parse HEAD)
     version_target=$(cat VERSION | xargs)
-    cd "$workdir" # Voltar para o diretório principal
+    cd "$workdir"
 }
 
 compile_mesa() {
     local source_dir="$workdir/mesa"
     local build_dir_name="build"
-    local description="Danil's Fork ($target_branch)"
+    # ALTERADO: Descrição da compilação
+    local description="PixelyIon's Fork ($target_branch)"
 
     echo -e "${green}--- Compiling: $description ---${nocolor}"
     cd "$source_dir"
@@ -127,11 +125,12 @@ EOF
 package_driver() {
     local source_dir="$workdir/mesa"
     local build_dir_name="build"
-    local description_name="Danil's Fork ($target_branch)" # Descrição atualizada
+    # ALTERADO: Descrição no meta.json
+    local description_name="PixelyIon's Fork ($target_branch)"
     local version_str=$version_target
     local commit_hash_short=$(git -C $source_dir rev-parse --short HEAD)
     local commit_hash_full=$commit_target
-    local repo_url=$mesasrc # URL do fork do Danil
+    local repo_url=$mesasrc # URL do fork do PixelyIon
 
     echo -e "${green}--- Packaging: $description_name ---${nocolor}"
     local compiled_lib="$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
@@ -152,7 +151,8 @@ package_driver() {
     mv lib_temp.so "$lib_final_name"
 
 	date_meta=$(date +'%b %d, %Y')
-    local meta_name="Turnip-Danil-${commit_hash_short}" # Nome curto atualizado
+    # ALTERADO: Nome curto no meta.json
+    local meta_name="Turnip-PixelyIon-${commit_hash_short}"
 	cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
@@ -187,15 +187,16 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
     local target_commit_short=$(git -C mesa rev-parse --short HEAD)
 
-    # Tag baseada na data e commit
-    echo "Danil-${date_tag}-${target_commit_short}" > tag
-    echo "Turnip CI Build - ${date_tag} (Danil's Fork)" > release
+    # ALTERADO: Tag e nome da release
+    echo "PixelyIon-${date_tag}-${target_commit_short}" > tag
+    echo "Turnip CI Build - ${date_tag} (PixelyIon's Fork)" > release
 
-    echo "Automated Turnip CI build from Danil's Mesa fork." > description
+    # ALTERADO: Descrição da release
+    echo "Automated Turnip CI build from PixelyIon's Mesa fork." > description
     echo "" >> description
     echo "### Build Details:" >> description
-    echo "**Base:** Danil's Mesa fork, branch \`$target_branch\`" >> description
-    echo "**Commit:** [${target_commit_short}](${repo_url%.git}/-/commit/${commit_target})" >> description # Usa repo_url para link correto
+    echo "**Base:** PixelyIon's Mesa fork, branch \`$target_branch\`" >> description
+    echo "**Commit:** [${target_commit_short}](${mesasrc%.git}/-/commit/${commit_target})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
 }
