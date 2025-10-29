@@ -9,7 +9,6 @@ workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
 mesa_repo_main="https://gitlab.freedesktop.org/mesa/mesa.git"
-autotuner_mr_num="37802"
 
 # --- Variáveis Globais ---
 commit_target=""
@@ -36,6 +35,8 @@ check_deps(){
 
 prepare_ndk(){
 	echo "Preparing NDK ..."
+	# Cria o diretório de trabalho principal aqui se não existir
+	mkdir -p "$workdir"
 	cd "$workdir"
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		if [ ! -d "$ndkver" ]; then
@@ -58,36 +59,19 @@ prepare_mesa_source() {
 	fi
     
     echo "Cloning main Mesa repository..."
-	# Clone completo para permitir merge
-	git clone "$mesa_repo_main" mesa
+	# Clone raso é suficiente agora, já que não há merge
+	git clone --depth=1 "$mesa_repo_main" mesa
 	cd mesa
-
-    # Configurar identidade local para o Git, necessária para o merge
-	echo -e "${green}Configuring local git identity for merge...${nocolor}"
-	git config user.name "CI Builder"
-	git config user.email "ci@builder.com"
-	
-	# Fetch e merge do MR Autotuner
-	echo -e "${green}Fetching Merge Request !${autotuner_mr_num}...${nocolor}"
-	git fetch origin "refs/merge-requests/${autotuner_mr_num}/head"
-	echo -e "${green}Merging fetched MR !${autotuner_mr_num} into main branch...${nocolor}"
-	if git merge --no-edit FETCH_HEAD; then
-		echo -e "${green}Merge successful!${nocolor}\n"
-	else
-		echo -e "${red}Merge failed for MR !${autotuner_mr_num}. Conflicts might need manual resolution.${nocolor}"
-        # Parar o script se o merge falhar
-        exit 1 
-	fi
 
     commit_target=$(git rev-parse HEAD)
     version_target=$(cat VERSION | xargs)
-    cd "$workdir" # Voltar para o diretório principal
+    cd "$workdir"
 }
 
 compile_mesa() {
     local source_dir="$workdir/mesa"
-    local build_dir_name="build" # Nome de build simples
-    local description="Mesa Main + Autotuner MR !${autotuner_mr_num}"
+    local build_dir_name="build"
+    local description="Mesa Main Branch"
 
     echo -e "${green}--- Compiling: $description ---${nocolor}"
     cd "$source_dir"
@@ -136,12 +120,11 @@ EOF
 package_driver() {
     local source_dir="$workdir/mesa"
     local build_dir_name="build"
-    local description_name="Mesa Main + Autotuner MR !${autotuner_mr_num}"
+    local description_name="Mesa Main Branch"
     local version_str=$version_target
     local commit_hash_short=$(git -C $source_dir rev-parse --short HEAD)
     local commit_hash_full=$commit_target
     local repo_url=$mesa_repo_main
-    local output_suffix="autotuner_mr" # Sufixo para o zip
 
     echo -e "${green}--- Packaging: $description_name ---${nocolor}"
     local compiled_lib="$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
@@ -150,8 +133,8 @@ package_driver() {
     local lib_final_name="vulkan.ad07XX.so" 
     local soname="vulkan.adreno.so" 
 
-    # Nome do arquivo ZIP com sufixo
-    local output_filename="turnip_$(date +'%Y%m%d')_${commit_hash_short}_${output_suffix}.zip"
+    # Nome do arquivo ZIP sem sufixo
+    local output_filename="turnip_$(date +'%Y%m%d')_${commit_hash_short}.zip"
 
     mkdir -p "$package_temp_dir"
     
@@ -162,7 +145,7 @@ package_driver() {
     mv lib_temp.so "$lib_final_name"
 
 	date_meta=$(date +'%b %d, %Y')
-    local meta_name="Turnip-Main-${commit_hash_short}-AutotunerMR" # Nome curto para meta.json
+    local meta_name="Turnip-Main-${commit_hash_short}"
 	cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
@@ -197,15 +180,13 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
     local target_commit_short=$(git -C mesa rev-parse --short HEAD)
 
-    # Tag baseada na data e commit
-    echo "Mesa-Main-MR${autotuner_mr_num}-${date_tag}-${target_commit_short}" > tag
-    echo "Turnip CI Build - ${date_tag} (Main + Autotuner MR !${autotuner_mr_num})" > release
+    echo "Mesa-Main-${date_tag}-${target_commit_short}" > tag
+    echo "Turnip CI Build - ${date_tag} (Main Branch)" > release
 
-    echo "Automated Turnip CI build." > description
+    echo "Automated Turnip CI build from Mesa main branch." > description
     echo "" >> description
     echo "### Build Details:" >> description
     echo "**Base:** Mesa main branch" >> description
-    echo "**Merged:** Merge Request !${autotuner_mr_num} (new autotuner logic)." >> description
     echo "**Commit:** [${target_commit_short}](${mesa_repo_main%.git}/-/commit/${commit_target})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
@@ -214,8 +195,6 @@ generate_release_info() {
 
 # --- Execução Principal ---
 check_deps
-# Cria o diretório de trabalho principal apenas uma vez
-mkdir -p "$workdir" 
 prepare_ndk
 prepare_mesa_source
 compile_mesa
