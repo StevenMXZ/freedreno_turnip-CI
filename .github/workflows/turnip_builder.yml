@@ -1,5 +1,4 @@
-# Nome do Workflow que aparecerá na aba "Actions" do GitHub
-name: Build and Release Turnip Driver
+name: Build and Release Turnip (PixelyIon)
 
 on:
   workflow_dispatch:
@@ -24,16 +23,9 @@ jobs:
       - name: Execute Build Script
         run: bash ./turnip_builder.sh
 
-      # --- PASSO DE DEPURAÇÃO READICIONADO ---
-      - name: List Build Artifacts for Debugging
-        run: |
-          echo "Listing contents of turnip_workdir to find the zip file..."
-          ls -lha turnip_workdir # Usando -lha para mais detalhes
-
       - name: Get Release Info
         id: get_info
         run: |
-          echo "RELEASE_NAME=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
           echo "TAG_NAME=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
           echo "BODY_PATH=turnip_workdir/description" >> "$GITHUB_OUTPUT"
 
@@ -42,14 +34,14 @@ jobs:
         with:
           name: build-logs
           path: |
-            turnip_workdir/meson_log_* # Ajustado para pegar todos os logs
-            turnip_workdir/ninja_log_* # Ajustado para pegar todos os logs
+            turnip_workdir/meson_log_*
+            turnip_workdir/ninja_log_*
+        continue-on-error: true # Não falha se os logs não forem encontrados
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_info.outputs.TAG_NAME }}
-          name: ${{ steps.get_info.outputs.RELEASE_NAME }}
           body_path: ${{ steps.get_info.outputs.BODY_PATH }}
-          files: turnip_workdir/*.zip
+          files: turnip_workdir/*.zip # Pega o zip gerado
           draft: false
