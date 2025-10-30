@@ -67,25 +67,22 @@ prepare_mesa_source() {
     echo -e "${green}Checking out branch '$target_branch'...${nocolor}"
     git checkout "$target_branch"
 
-    # --- [NOVO BLOCO: aplica o patch solicitado] ---
-    echo -e "${green}Applying autotune debug patch...${nocolor}"
+    # --- [NOVO PATCH] ---
+    echo -e "${green}Applying autotune resolution patch...${nocolor}"
     patch -p1 <<'EOF'
 diff --git a/src/freedreno/vulkan/tu_autotune.cc b/src/freedreno/vulkan/tu_autotune.cc
-index 9d084349ca7..4f8aadc5e43 100644
+index 9d084349ca7..db6aa30c1b7 100644
 --- a/src/freedreno/vulkan/tu_autotune.cc
 +++ b/src/freedreno/vulkan/tu_autotune.cc
-@@ -25,9 +25,9 @@
+@@ -1136,7 +1136,7 @@ struct tu_autotune::rp_history {
+                constexpr uint64_t MIN_LOCK_THRESHOLD = GPU_TICKS_PER_US * 1'000; /* 1ms */
+                constexpr uint32_t LOCK_PERCENT_DIFF = 30;
  
- /** Compile-time debug options **/
- 
--#define TU_AUTOTUNE_DEBUG_LOG_BASE      0
-+#define TU_AUTOTUNE_DEBUG_LOG_BASE      1
- #define TU_AUTOTUNE_DEBUG_LOG_BANDWIDTH 0
--#define TU_AUTOTUNE_DEBUG_LOG_PROFILED  0
-+#define TU_AUTOTUNE_DEBUG_LOG_PROFILED  1
- #define TU_AUTOTUNE_DEBUG_LOG_PREEMPT   0
- 
- /* Process any pending entries on autotuner finish, could be used to gather data from traces. */
+-               bool has_resolved = sysmem_prob >= FAST_MAX_PROBABILITY || sysmem_prob <= FAST_MIN_PROBABILITY;
++               bool has_resolved = sysmem_prob == SLOW_MAX_PROBABILITY || sysmem_prob == SLOW_MIN_PROBABILITY;
+                bool enough_samples = sysmem_ema.count >= MIN_LOCK_DURATION_COUNT && gmem_ema.count >= MIN_LOCK_DURATION_COUNT;
+                uint64_t min_avg = MIN2(avg_sysmem, avg_gmem), max_avg = MAX2(avg_sysmem, avg_gmem);
+                uint64_t percent_diff = (100 * (max_avg - min_avg)) / min_avg;
 EOF
     # --------------------------------------------------
 
