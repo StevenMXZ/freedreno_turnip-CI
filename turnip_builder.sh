@@ -67,6 +67,28 @@ prepare_mesa_source() {
     echo -e "${green}Checking out branch '$target_branch'...${nocolor}"
     git checkout "$target_branch"
 
+    # --- [NOVO BLOCO: aplica o patch solicitado] ---
+    echo -e "${green}Applying autotune debug patch...${nocolor}"
+    patch -p1 <<'EOF'
+diff --git a/src/freedreno/vulkan/tu_autotune.cc b/src/freedreno/vulkan/tu_autotune.cc
+index 9d084349ca7..4f8aadc5e43 100644
+--- a/src/freedreno/vulkan/tu_autotune.cc
++++ b/src/freedreno/vulkan/tu_autotune.cc
+@@ -25,9 +25,9 @@
+ 
+ /** Compile-time debug options **/
+ 
+-#define TU_AUTOTUNE_DEBUG_LOG_BASE      0
++#define TU_AUTOTUNE_DEBUG_LOG_BASE      1
+ #define TU_AUTOTUNE_DEBUG_LOG_BANDWIDTH 0
+-#define TU_AUTOTUNE_DEBUG_LOG_PROFILED  0
++#define TU_AUTOTUNE_DEBUG_LOG_PROFILED  1
+ #define TU_AUTOTUNE_DEBUG_LOG_PREEMPT   0
+ 
+ /* Process any pending entries on autotuner finish, could be used to gather data from traces. */
+EOF
+    # --------------------------------------------------
+
     commit_target=$(git rev-parse HEAD)
     version_target=$(cat VERSION | xargs)
     cd "$workdir"
@@ -75,7 +97,6 @@ prepare_mesa_source() {
 compile_mesa() {
     local source_dir="$workdir/mesa"
     local build_dir_name="build"
-    # ALTERADO: Descrição da compilação
     local description="PixelyIon's Fork ($target_branch)"
 
     echo -e "${green}--- Compiling: $description ---${nocolor}"
@@ -125,12 +146,11 @@ EOF
 package_driver() {
     local source_dir="$workdir/mesa"
     local build_dir_name="build"
-    # ALTERADO: Descrição no meta.json
     local description_name="PixelyIon's Fork ($target_branch)"
     local version_str=$version_target
     local commit_hash_short=$(git -C $source_dir rev-parse --short HEAD)
     local commit_hash_full=$commit_target
-    local repo_url=$mesasrc # URL do fork do PixelyIon
+    local repo_url=$mesasrc
 
     echo -e "${green}--- Packaging: $description_name ---${nocolor}"
     local compiled_lib="$source_dir/$build_dir_name/src/freedreno/vulkan/libvulkan_freedreno.so"
@@ -139,7 +159,6 @@ package_driver() {
     local lib_final_name="vulkan.ad07XX.so" 
     local soname="vulkan.adreno.so" 
 
-    # Nome do arquivo ZIP sem sufixo extra
     local output_filename="turnip_$(date +'%Y%m%d')_${commit_hash_short}.zip"
 
     mkdir -p "$package_temp_dir"
@@ -151,7 +170,6 @@ package_driver() {
     mv lib_temp.so "$lib_final_name"
 
 	date_meta=$(date +'%b %d, %Y')
-    # ALTERADO: Nome curto no meta.json
     local meta_name="Turnip-PixelyIon-${commit_hash_short}"
 	cat <<EOF >"meta.json"
 {
@@ -187,11 +205,9 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
     local target_commit_short=$(git -C mesa rev-parse --short HEAD)
 
-    # ALTERADO: Tag e nome da release
     echo "PixelyIon-${date_tag}-${target_commit_short}" > tag
     echo "Turnip CI Build - ${date_tag} (PixelyIon's Fork)" > release
 
-    # ALTERADO: Descrição da release
     echo "Automated Turnip CI build from PixelyIon's Mesa fork." > description
     echo "" >> description
     echo "### Build Details:" >> description
@@ -200,7 +216,6 @@ generate_release_info() {
     
     echo -e "${green}Release info generated.${nocolor}"
 }
-
 
 # --- Execução Principal ---
 check_deps
