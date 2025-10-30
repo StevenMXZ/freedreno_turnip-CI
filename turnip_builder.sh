@@ -67,7 +67,8 @@ prepare_source(){
 	version_str=$(cat VERSION | xargs)
 
 	echo -e "${green}Applying autotune patch...${nocolor}"
-	patch -p1 <<'EOF'
+	# Usando 'git apply' para melhor detecção de erros
+	if ! patch -p1 <<'EOF'
 diff --git a/src/freedreno/vulkan/tu_autotune.cc b/src/freedreno/vulkan/tu_autotune.cc
 index 9d084349ca7..f15111813db 100644
 --- a/src/freedreno/vulkan/tu_autotune.cc
@@ -87,6 +88,14 @@ index 9d084349ca7..f15111813db 100644
              }
           }
 EOF
+	then
+		echo -e "${red}Patch failed to apply!${nocolor}"
+		exit 1
+	fi
+	echo -e "${green}Patch applied successfully.${nocolor}"
+
+	# Atualiza o hash do commit APÓS o patch, se o patch mudar o histórico (o que 'patch -p1' não faz, mas é uma boa prática)
+	commit_hash=$(git rev-parse HEAD)
 
 	cd "$workdir"
 }
@@ -177,6 +186,27 @@ EOF
 	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
 }
 
+# --- ADICIONADO: Função para gerar arquivos para a Ação do GitHub ---
+generate_release_info() {
+    echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
+    cd "$workdir"
+    local date_tag=$(date +'%Y%m%d')
+	local short_hash=${commit_hash:0:7}
+
+    # 1. Cria o arquivo 'tag'
+    echo "PixelyIon-${date_tag}-${short_hash}" > tag
+
+    # 2. Cria o arquivo 'description'
+    echo "Automated Turnip CI build from PixelyIon's Mesa fork." > description
+    echo "" >> description
+    echo "### Build Details:" >> description
+    echo "**Base:** PixelyIon's Mesa fork, branch \`$target_branch\`" >> description
+    echo "**Patch Applied:** Remove autotune lock logic from \`tu_autotune.cc\`." >> description
+    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
+    
+    echo -e "${green}Release info generated.${nocolor}"
+}
+
 # ===========================
 # Execução
 # ===========================
@@ -187,5 +217,6 @@ prepare_ndk
 prepare_source
 compile_mesa
 package_driver
+generate_release_info # <-- ADICIONADO
 
 echo -e "${green}🎉 Build completed successfully!${nocolor}"
