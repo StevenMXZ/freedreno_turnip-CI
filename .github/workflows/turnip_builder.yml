@@ -1,20 +1,23 @@
 name: Compare Mesa Commits
 
 on:
-  workflow_dispatch:  # permite rodar manualmente
-  push:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   compare:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Install Git
         run: sudo apt-get update && sudo apt-get install -y git
 
-      - name: Run comparison script
-        run: bash ./compare_mesa_commits.sh
+      - name: Compare Mesa commits
+        run: |
+          OLD_COMMIT="47619ef5389c44cb92066c20409e6a9617d685fb"
+          NEW_COMMIT="93f24f0bd02916d9ce4cc452312c19e9cca5d299"
+          echo "🔽 Clonando Mesa..."
+          git clone --depth=10000 https://gitlab.freedesktop.org/mesa/mesa.git mesa-repo
+          cd mesa-repo
+          COUNT=$(git rev-list --count ${OLD_COMMIT}..${NEW_COMMIT})
+          echo "👉 Total: $COUNT commits"
+          git log --oneline ${OLD_COMMIT}..${NEW_COMMIT} | tail -n 20
