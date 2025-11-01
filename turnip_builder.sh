@@ -1,190 +1,29 @@
-#!/bin/bash -e
-green='\033[0;32m'
-red='\033[0;31m'
-nocolor='\033[0m'
+#!/bin/bash
+set -e
 
-deps="meson ninja patchelf unzip curl pip flex bison zip git"
-workdir="$(pwd)/turnip_workdir"
-packagedir="$workdir/turnip_module"
-ndkver="android-ndk-r29"
-sdkver="35"
-mesasrc="https://gitlab.freedesktop.org/mesa/mesa.git"
-mesa_tag="26.0.0"
+# Hashes dos commits a comparar
+OLD_COMMIT="47619ef5389c44cb92066c20409e6a9617d685fb"
+NEW_COMMIT="93f24f0bd02916d9ce4cc452312c19e9cca5d299"
 
-base_patches=()
-experimental_patches=()
-failed_patches=()
-commit=""
-commit_short=""
-mesa_version=""
-vulkan_version=""
-clear
+# Clona o repositório Mesa
+echo "🔽 Clonando o repositório Mesa..."
+git clone --depth=10000 https://gitlab.freedesktop.org/mesa/mesa.git mesa-repo
+cd mesa-repo
 
-run_all(){
-	check_deps
-	prep
-}
+# Confere se ambos os commits existem
+if ! git cat-file -e $OLD_COMMIT || ! git cat-file -e $NEW_COMMIT; then
+  echo "❌ Um dos commits não existe!"
+  exit 1
+fi
 
-prep () {
-	prepare_workdir
-	build_lib_for_android
-	port_lib_for_adrenotool
-}
+# Conta o número de commits entre eles
+COUNT=$(git rev-list --count ${OLD_COMMIT}..${NEW_COMMIT})
+echo "📊 Número de commits entre:"
+echo "De: $OLD_COMMIT"
+echo "Até: $NEW_COMMIT"
+echo "👉 Total: $COUNT commits"
 
-check_deps(){
-	echo "Checking system for required Dependencies ..."
-	for deps_chk in $deps;
-		do
-			sleep 0.25
-			if command -v "$deps_chk" >/dev/null 2>&1 ; then
-				echo -e "$green - $deps_chk found $nocolor"
-			else
-				echo -e "$red - $deps_chk not found, can't continue. $nocolor"
-				deps_missing=1
-			fi;
-		done
-
-		if [ "$deps_missing" == "1" ]
-			then echo "Please install missing dependencies" && exit 1
-		fi
-
-	echo "Installing python Mako dependency (if missing) ..." $'\n'
-	pip install mako &> /dev/null
-}
-
-prepare_workdir(){
-	echo "Creating and entering to work directory ..." $'\n'
-	mkdir -p "$workdir" && cd "$_"
-
-	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
-		if [ ! -d "$ndkver" ]; then
-			echo "Downloading android-ndk from google server (~640 MB) ..." $'\n'
-			curl https://dl.google.com/android/repository/"$ndkver"-linux.zip --output "$ndkver"-linux.zip &> /dev/null
-			echo "Exracting android-ndk to a folder ..." $'\n'
-			unzip "$ndkver"-linux.zip  &> /dev/null
-		fi
-	else	
-		echo "Using android ndk from github image"
-	fi
-
-	if [ -d mesa ]; then
-		echo "Removing old mesa ..." $'\n'
-		rm -rf mesa
-	fi
-	
-	echo "Cloning main Mesa repository..." $'\n'
-	git clone "$mesasrc"
-
-	cd mesa
-	
-	echo -e "${green}Checking out tag '$mesa_tag'...${nocolor}"
-	git checkout $mesa_tag
-
-	# --- PATCH ADICIONADO ---
-	echo -e "${green}Applying patch: enable_tp_ubwc_flag_hint = True...${nocolor}"
-	sed -i 's/enable_tp_ubwc_flag_hint = False,/enable_tp_ubwc_flag_hint = True,/' src/freedreno/common/freedreno_devices.py
-	echo -e "${green}Patch applied successfully!${nocolor}\n"
-	# --- FIM DO PATCH ---
-
-	commit_short=$(git rev-parse --short HEAD)
-	commit=$(git rev-parse HEAD)
-	mesa_version="$mesa_tag" # Usamos a tag como versão principal
-	version=$(awk -F'COMPLETE VK_MAKE_API_VERSION(|)' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
-	major=$(echo $version | cut -d "," -f 2 | xargs)
-	minor=$(echo $version | cut -d "," -f 3 | xargs)
-	patch=$(awk -F'VK_HEADER_VERSION |\n#define' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
-	vulkan_version="$major.$minor.$patch"
-}
-
-build_lib_for_android(){
-	local ndk_root_path
-	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
-		ndk_root_path="$workdir/$ndkver"
-	else	
-		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
-	fi
-	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
-	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-
-	echo "Creating meson cross file ..." $'\n'
-	cat <<EOF >"$workdir/mesa/android-aarch64"
-[binaries]
-ar = '$ndk_bin_path/llvm-ar'
-c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
-cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
-c_ld = 'lld'
-cpp_ld = 'lld'
-strip = '$ndk_bin_path/aarch64-linux-android-strip'
-pkg-config = ['env', 'PKG_CONFIG_LIBDIR=$ndk_bin_path/pkg-config', '/usr/bin/pkg-config']
-[host_machine]
-system = 'android'
-cpu_family = 'aarch64'
-cpu = 'armv8'
-endian = 'little'
-EOF
-
-	echo "Generating build files ..." $'\n'
-	cd "$workdir/mesa"
-	meson setup build-android-aarch64 --cross-file "android-aarch64" -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir/meson_log"
-
-	echo "Compiling build files ..." $'\n'
-	ninja -C build-android-aarch64 2>&1 | tee "$workdir/ninja_log"
-}
-
-port_lib_for_adrenotool(){
-	local compiled_lib="$workdir/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so"
-	if [ ! -f "$compiled_lib" ]; then
-		echo -e "${red}Build failed: libvulkan_freedreno.so not found. Check compilation logs.${nocolor}"
-		exit 1
-	fi
-	
-	echo "Using patchelf to match soname ..."  $'\n'
-	cp "$compiled_lib" "$workdir"
-	cd "$workdir"
-	patchelf --set-soname vulkan.adreno.so libvulkan_freedreno.so
-	mv libvulkan_freedreno.so vulkan.ad07XX.so
-
-	mkdir -p "$packagedir" && cd "$_"
-
-	date=$(date +'%b %d, %Y')
-	# Adiciona um sufixo para indicar o patch
-	local suffix="_ubwc_hint" 
-	
-	cat <<EOF >"meta.json"
-{
-  "schemaVersion": 1,
-  "name": "Turnip - $date - $mesa_version$suffix",
-  "description": "Compiled from Mesa tag $mesa_version (Patched: enable_tp_ubwc_flag_hint=True), Commit $commit_short",
-  "author": "mesa-ci",
-  "packageVersion": "1",
-  "vendor": "Mesa",
-  "driverVersion": "$mesa_version/vk$vulkan_version",
-  "minApi": 27,
-  "libraryName": "vulkan.ad07XX.so"
-}
-EOF
-
-	filename=turnip_"$(date +'%Y%m%d')"_"${mesa_version//./_}"$suffix
-	echo "Copy necessary files from work directory ..." $'\n'
-	cp "$workdir"/vulkan.ad07XX.so "$packagedir"
-
-	echo "Packing files in to adrenotool package ..." $'\n'
-	cd "$packagedir"
-	zip -9 "$workdir"/"$filename".zip ./*
-
-	cd "$workdir"
-
-	echo "Turnip - Mesa $mesa_version - $date$suffix" > release
-	echo "${mesa_version//./_}_${commit_short}${suffix}" > tag # Tag para release no GitHub
-	echo  $filename > filename
-	echo "### Build from Mesa tag: $mesa_version" > description
-	echo "**Patched:** \`enable_tp_ubwc_flag_hint = True\`" >> description
-	echo "### Commit: [$commit_short](https://gitlab.freedesktop.org/mesa/mesa/-/commit/$commit)" >> description
-	
-	if ! [ -a "$workdir"/"$filename".zip ];
-		then echo -e "$red-Packing failed!$nocolor" && exit 1
-		else echo -e "$green-All done, you can take your zip from this folder;$nocolor" && echo "$workdir"/
-	fi
-}
-
-run_all
+# Mostra resumo opcional dos commits
+echo ""
+echo "📝 Lista resumida de commits:"
+git log --oneline ${OLD_COMMIT}..${NEW_COMMIT} | tail -n 20
