@@ -1,23 +1,31 @@
-name: Compare Mesa Commits
+name: Mesa Turnip Bisect
 
 on:
   workflow_dispatch:
 
 jobs:
-  compare:
+  bisect:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Install Git
-        run: sudo apt-get update && sudo apt-get install -y git
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Compare Mesa commits
+      - name: Install dependencies
         run: |
-          OLD_COMMIT="47619ef5389c44cb92066c20409e6a9617d685fb"
-          NEW_COMMIT="93f24f0bd02916d9ce4cc452312c19e9cca5d299"
-          echo "🔽 Clonando Mesa..."
-          git clone --depth=10000 https://gitlab.freedesktop.org/mesa/mesa.git mesa-repo
-          cd mesa-repo
-          COUNT=$(git rev-list --count ${OLD_COMMIT}..${NEW_COMMIT})
-          echo "👉 Total: $COUNT commits"
-          git log --oneline ${OLD_COMMIT}..${NEW_COMMIT} | tail -n 20
+          sudo apt-get update
+          sudo apt-get install -y python3-pip meson ninja-build patchelf flex bison zip curl git unzip ccache
+
+      - name: Run bisect process
+        run: |
+          chmod +x scripts/build_turnip.sh
+          chmod +x scripts/bisect_turnip.sh
+          bash scripts/bisect_turnip.sh
+
+      - name: Upload bisect logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesa-turnip-bisect-results
+          path: |
+            turnip_bisect/bisect_log.txt
+            turnip_bisect/bisect_result.txt
+            turnip_bisect/mesa/build/meson-log.txt
