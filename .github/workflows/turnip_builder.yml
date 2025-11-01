@@ -1,67 +1,20 @@
-name: Build "turnip"
+name: Compare Mesa Commits
 
 on:
-  workflow_dispatch:
-  schedule:
-  - cron: "20 5 1,15 * *"
+  workflow_dispatch:  # permite rodar manualmente
+  push:
+    branches: [ main ]
 
 jobs:
-  start_building_turnip:
-    runs-on: ubuntu-24.04
+  compare:
+    runs-on: ubuntu-latest
+
     steps:
-    - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Prepare environment
-      run: |
-        sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
-        sudo apt update
-        sudo apt build-dep mesa -y
-    
-    - name: Execute build script
-      run: bash ./turnip_builder.sh
+      - name: Install Git
+        run: sudo apt-get update && sudo apt-get install -y git
 
-    - name: Upload a Build Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: Upload meson and ninja logs for debugging
-        path: |
-          turnip_workdir/ninja_log
-          turnip_workdir/mesa/build-android-aarch64/meson-logs/meson-log.txt
-    
-    - id: versions
-      name: "Get release info"
-      run: |
-        echo "name=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
-        echo "tag=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
-        echo "filename=$(cat turnip_workdir/filename)" >> "$GITHUB_OUTPUT"
-        echo "patched=$(cat turnip_workdir/patched)" >> "$GITHUB_OUTPUT"
-        echo "experimental=$(cat turnip_workdir/experimental)" >> "$GITHUB_OUTPUT"
-
-    - name: Release "turnip"
-      uses: softprops/action-gh-release@v1
-      with:
-        body_path: turnip_workdir/description
-        name: ${{ steps.versions.outputs.name }}
-        tag_name: ${{ steps.versions.outputs.tag }}
-        files: |
-           turnip_workdir/${{ steps.versions.outputs.filename }}.zip
-
-    - name: Release "turnip" with experimental
-      if: ${{ contains(steps.versions.outputs.experimental, 'true') }}
-      uses: softprops/action-gh-release@v1
-      with:
-        body_path: turnip_workdir/description
-        name: ${{ steps.versions.outputs.name }}
-        tag_name: ${{ steps.versions.outputs.tag }}
-        files: |
-           turnip_workdir/${{ steps.versions.outputs.filename }}_experimental.zip
-      
-    - name: Release "turnip" with patched
-      if: ${{ contains(steps.versions.outputs.patched, 'true') }}
-      uses: softprops/action-gh-release@v1
-      with:
-        body_path: turnip_workdir/description
-        name: ${{ steps.versions.outputs.name }}
-        tag_name: ${{ steps.versions.outputs.tag }}
-        files: |
-           turnip_workdir/${{ steps.versions.outputs.filename }}_patched.zip
+      - name: Run comparison script
+        run: bash ./compare_mesa_commits.sh
