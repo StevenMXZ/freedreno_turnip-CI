@@ -1,38 +1,38 @@
 # Nome do Workflow que aparecerá na aba "Actions" do GitHub
-name: Build and Release Turnip Drivers (Multiple Variants)
+name: Build and Release Turnip Driver (Android 15)
 
 # Gatilhos que iniciam o workflow
 on:
   # Permite iniciar manualmente pela aba Actions
   workflow_dispatch:
-  # Aciona a build nos dias 1 e 15 de cada mês
+  # Aciona a build nos dias 1 e 15 de cada mês às 05:20 UTC
   schedule:
     - cron: "20 5 1,15 * *"
 
 jobs:
   build_and_release:
-    name: Build and Release Turnip Variants
-    runs-on: ubuntu-latest # Usando a versão estável mais recente do Ubuntu
+    name: Build and Release Turnip Driver
+    runs-on: ubuntu-latest
     steps:
-      # 1. Faz o checkout do seu código (onde está o turnip_builder.sh)
+      # 1. Faz o checkout do código (onde está turnip_builder.sh)
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 2. Prepara o ambiente e instala todas as dependências de build
+      # 2. Prepara o ambiente e instala dependências de build
       - name: Prepare Build Environment
         run: |
           sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update
-          # Instala as dependências de build do Mesa de forma eficiente
+          # Instala dependências do Mesa
           sudo apt-get build-dep mesa -y
-          # Garante que meson e ninja estejam nas versões mais recentes
+          # Instala/atualiza meson e ninja
           pip install --upgrade meson ninja
 
-      # 3. Executa o nosso script de build principal (que agora faz 3 builds)
+      # 3. Executa o script de build (Mesa Main Android 15)
       - name: Execute Build Script
         run: bash ./turnip_builder.sh
 
-      # 4. Lê as informações da release geradas pelo script (tag, nome, descrição)
+      # 4. Lê informações da release geradas pelo script
       - name: Get Release Info
         id: get_info
         run: |
@@ -40,8 +40,7 @@ jobs:
           echo "TAG_NAME=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
           echo "BODY_PATH=turnip_workdir/description" >> "$GITHUB_OUTPUT"
 
-      # 5. Anexa os logs da compilação como um artefato para depuração
-      #    Inclui logs específicos de cada build gerados pelo script modificado
+      # 5. Anexa os logs da compilação como artefato para depuração
       - name: Upload Logs as Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -50,14 +49,12 @@ jobs:
             turnip_workdir/meson_log_*
             turnip_workdir/ninja_log_*
 
-      # 6. Cria a Release ÚNICA no GitHub com TODOS os drivers compilados
+      # 6. Cria a Release no GitHub com o driver compilado
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Usa as informações lidas do passo anterior
           tag_name: ${{ steps.get_info.outputs.TAG_NAME }}
           name: ${{ steps.get_info.outputs.RELEASE_NAME }}
           body_path: ${{ steps.get_info.outputs.BODY_PATH }}
-          # Usa um curinga para encontrar e anexar TODOS os arquivos .zip da pasta
           files: turnip_workdir/*.zip
-          draft: false # Mude para 'true' se quiser revisar antes de publicar
+          draft: false # Altere para 'true' se quiser revisar antes de publicar
