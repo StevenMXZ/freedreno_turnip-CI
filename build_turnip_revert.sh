@@ -1,4 +1,6 @@
 #!/bin/bash -e
+export TERM=dumb
+
 green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
@@ -162,9 +164,6 @@ generate_release_info(){
     echo "Turnip Revert Build - ${date_tag}" > release
     echo "Build reverting Mesa commits after ${good_commit} to avoid Unreal freezes." > description
 }
-
-clear
-check_deps
 mkdir -p "$workdir"
 prepare_ndk
 prepare_source
