@@ -39,7 +39,6 @@ check_deps(){
 
 prepare_ndk(){
 	echo "📦 Preparing Android NDK ..."
-	# Cria o diretório de trabalho principal aqui se não existir
 	mkdir -p "$workdir"
 	cd "$workdir"
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
@@ -60,12 +59,11 @@ prepare_source(){
 	if [ -d mesa ]; then
 		rm -rf mesa
 	fi
-	# Clone completo para garantir que o patch possa ser aplicado
 	git clone "$mesa_repo" mesa
 
     # --- PATCH APLICADO AQUI ---
-    # Salva o patch em um arquivo temporário (fora do repo 'mesa')
 	echo "Creating GPU hang recovery patch file..."
+    # CORREÇÃO: O conteúdo do patch foi atualizado para usar os caminhos corretos (common/)
 	cat <<'EOF' > "$workdir/gpu_hang_revert.patch"
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mesa Revert Bot <mesa@local>
@@ -127,10 +125,8 @@ index 5a1ff4d58d..96b1d74a42 100644
 2.46.0
 EOF
 
-    # Entra no diretório do repo
 	cd mesa
 	echo -e "${green}Applying GPU hang recovery patch using 'git apply'...${nocolor}"
-    # Usa 'git apply' que entende o formato completo do patch
 	if ! git apply "$workdir/gpu_hang_revert.patch"; then
 		echo -e "${red}Patch failed to apply!${nocolor}"
 		exit 1
