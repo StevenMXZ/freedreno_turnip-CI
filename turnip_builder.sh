@@ -9,8 +9,9 @@ ndkver="android-ndk-r29"
 sdkver="35"
 mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
 
-good_commit="47619ef5"
-bad_commit="93f24f0b"
+# 🔁 commits base
+good_commit="47619ef5"   # estável
+target_branch="main"     # última versão da Mesa
 
 check_deps(){
     echo "🔍 Checking system dependencies ..."
@@ -44,16 +45,21 @@ prepare_ndk(){
 }
 
 prepare_source(){
-    echo "🌿 Cloning Mesa and checking out bad commit..."
+    echo "🌿 Cloning Mesa latest and reverting changes after $good_commit ..."
     cd "$workdir"
     rm -rf mesa
-    git clone "$mesa_repo" mesa
+    git clone --depth=1 "$mesa_repo" mesa
     cd mesa
-    git checkout "$bad_commit"
 
-    echo "🔄 Reverting commits introduced after $good_commit ..."
+    # Busca o histórico completo para o revert funcionar
+    git fetch origin --unshallow || true
+    git fetch origin --tags
+    git checkout "$target_branch"
+
     git config user.name "mesa-ci"
     git config user.email "mesa-ci@users.noreply.github.com"
+
+    echo "🔄 Reverting commits introduced after $good_commit ..."
     git revert --no-edit "$good_commit"..HEAD || true
 
     commit_hash=$(git rev-parse HEAD)
@@ -62,7 +68,7 @@ prepare_source(){
 }
 
 compile_mesa(){
-    echo -e "${green}⚙️ Compiling Mesa (Main Branch)...${nocolor}"
+    echo -e "${green}⚙️ Compiling Mesa (Turnip)...${nocolor}"
 
     local source_dir="$workdir/mesa"
     local build_dir="$source_dir/build"
@@ -135,8 +141,8 @@ package_driver(){
     cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip (Revert Build) - $date_meta - $short_hash",
-  "description": "Reverted commits between $good_commit and $bad_commit",
+  "name": "Turnip (Revert HEAD) - $date_meta - $short_hash",
+  "description": "Turnip built from HEAD with reverts after $good_commit to fix Unreal freezes.",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
@@ -154,7 +160,7 @@ generate_release_info(){
     local short_hash=${commit_hash:0:7}
     echo "Turnip-Revert-${date_tag}-${short_hash}" > tag
     echo "Turnip Revert Build - ${date_tag}" > release
-    echo "Build reverting Mesa commits that introduced Unreal freezes." > description
+    echo "Build reverting Mesa commits after ${good_commit} to avoid Unreal freezes." > description
 }
 
 clear
