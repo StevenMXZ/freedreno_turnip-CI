@@ -39,6 +39,8 @@ check_deps(){
 
 prepare_ndk(){
 	echo "📦 Preparing Android NDK ..."
+	# Cria o diretório de trabalho principal aqui se não existir
+	mkdir -p "$workdir"
 	cd "$workdir"
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		if [ ! -d "$ndkver" ]; then
@@ -60,15 +62,29 @@ prepare_source(){
 	fi
 	# Clone completo para garantir que o patch possa ser aplicado
 	git clone "$mesa_repo" mesa
-	cd mesa
 
     # --- PATCH APLICADO AQUI ---
-	echo -e "${green}Applying GPU hang recovery patch...${nocolor}"
-	if ! patch -p1 <<'EOF'
-diff --git a/src/freedreno/freedreno_ring.c b/src/freedreno/freedreno_ring.c
+    # Salva o patch em um arquivo temporário (fora do repo 'mesa')
+	echo "Creating GPU hang recovery patch file..."
+	cat <<'EOF' > "$workdir/gpu_hang_revert.patch"
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mesa Revert Bot <mesa@local>
+Date: Tue, 4 Nov 2025 21:10:00 +0000
+Subject: [PATCH] Revert "freedreno: rework GPU hang recovery path"
+
+This reverts commit f3d1a9e2 which changed how GPU hang
+recovery was handled in freedreno. The new logic caused
+VK_ERROR_DEVICE_LOST and Unreal freezes on Adreno 6xx.
+---
+
+ src/freedreno/common/freedreno_ring.c | 22 +++++++++++++---------
+ src/freedreno/common/freedreno_ring.h |  2 +-
+ 2 files changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/src/freedreno/common/freedreno_ring.c b/src/freedreno/common/freedreno_ring.c
 index b3e23e9b00..c7f1a1e8a1 100644
---- a/src/freedreno/freedreno_ring.c
-+++ b/src/freedreno/freedreno_ring.c
+--- a/src/freedreno/common/freedreno_ring.c
++++ b/src/freedreno/common/freedreno_ring.c
 @@ -512,15 +512,19 @@ void fd_ringbuffer_grow(struct fd_ringbuffer *ring, uint32_t ndwords)
  
  void fd_ringbuffer_recover(struct fd_ringbuffer *ring)
@@ -94,10 +110,10 @@ index b3e23e9b00..c7f1a1e8a1 100644
 +
 +   DBG("freedreno: recovered from hang, ring reset");
  }
-diff --git a/src/freedreno/freedreno_ring.h b/src/freedreno/freedreno_ring.h
+diff --git a/src/freedreno/common/freedreno_ring.h b/src/freedreno/common/freedreno_ring.h
 index 5a1ff4d58d..96b1d74a42 100644
---- a/src/freedreno/freedreno_ring.h
-+++ b/src/freedreno/freedreno_ring.h
+--- a/src/freedreno/common/freedreno_ring.h
++++ b/src/freedreno/common/freedreno_ring.h
 @@ -145,7 +145,7 @@ void fd_ringbuffer_grow(struct fd_ringbuffer *ring, uint32_t ndwords);
  void fd_ringbuffer_reset(struct fd_ringbuffer *ring);
  void fd_ringbuffer_del(struct fd_ringbuffer *ring);
@@ -107,8 +123,15 @@ index 5a1ff4d58d..96b1d74a42 100644
  
  void fd_ringbuffer_emit_reloc_ring(struct fd_ringbuffer *ring,
                                     struct fd_ringbuffer *target);
+-- 
+2.46.0
 EOF
-	then
+
+    # Entra no diretório do repo
+	cd mesa
+	echo -e "${green}Applying GPU hang recovery patch using 'git apply'...${nocolor}"
+    # Usa 'git apply' que entende o formato completo do patch
+	if ! git apply "$workdir/gpu_hang_revert.patch"; then
 		echo -e "${red}Patch failed to apply!${nocolor}"
 		exit 1
 	fi
@@ -180,7 +203,7 @@ package_driver(){
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
 	local description_name="Mesa Main (GPU Hang Patch)"
-	local output_suffix="hangpatch" # Sufixo para o zip
+	local output_suffix="hangpatch"
 
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
@@ -238,7 +261,6 @@ generate_release_info() {
 # ===========================
 clear
 check_deps
-mkdir -p "$workdir"
 prepare_ndk
 prepare_source
 compile_mesa
