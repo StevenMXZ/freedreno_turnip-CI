@@ -1,31 +1,24 @@
-name: Mesa Turnip Bisect
+name: Mesa commit diff
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # executa manualmente
 
 jobs:
-  bisect:
+  get_commits:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
+      - name: Checkout (dummy)
         uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-pip meson ninja-build patchelf flex bison zip curl git unzip ccache
+      - name: Instalar dependências do Git
+        run: sudo apt-get update && sudo apt-get install -y git
 
-      - name: Run bisect process
-        run: |
-          chmod +x scripts/build_turnip.sh
-          chmod +x scripts/bisect_turnip.sh
-          bash scripts/bisect_turnip.sh
+      - name: Rodar script de extração
+        run: bash .github/scripts/get_commits.sh
 
-      - name: Upload bisect logs
+      - name: Upload do arquivo de commits
         uses: actions/upload-artifact@v4
         with:
-          name: mesa-turnip-bisect-results
-          path: |
-            turnip_bisect/bisect_log.txt
-            turnip_bisect/bisect_result.txt
-            turnip_bisect/mesa/build/meson-log.txt
+          name: mesa-commits-between
+          path: commits_between.txt
