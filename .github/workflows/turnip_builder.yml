@@ -1,23 +1,23 @@
 name: Mesa commit diff
 
 on:
-  workflow_dispatch: # executa manualmente
+  workflow_dispatch:
 
 jobs:
   get_commits:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout (dummy)
+      - name: Checkout dummy
         uses: actions/checkout@v4
 
-      - name: Instalar dependências do Git
+      - name: Instalar Git
         run: sudo apt-get update && sudo apt-get install -y git
 
-      - name: Rodar script de extração
+      - name: Rodar script
         run: bash .github/scripts/get_commits.sh
 
-      - name: Upload do arquivo de commits
+      - name: Upload do resultado
         uses: actions/upload-artifact@v4
         with:
           name: mesa-commits-between
