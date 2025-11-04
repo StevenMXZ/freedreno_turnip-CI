@@ -63,40 +63,37 @@ prepare_source(){
 
     # --- PATCH APLICADO AQUI ---
 	echo "Creating GPU hang recovery patch file..."
-    # CORREÇÃO: O conteúdo do patch foi atualizado para usar os caminhos corretos (common/)
+    # CONTEÚDO DO PATCH ATUALIZADO
 	cat <<'EOF' > "$workdir/gpu_hang_revert.patch"
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mesa Revert Bot <mesa@local>
 Date: Tue, 4 Nov 2025 21:10:00 +0000
 Subject: [PATCH] Revert "freedreno: rework GPU hang recovery path"
 
-This reverts commit f3d1a9e2 which changed how GPU hang
-recovery was handled in freedreno. The new logic caused
-VK_ERROR_DEVICE_LOST and Unreal freezes on Adreno 6xx.
+This reverts commit f3d1a9e2, which modified GPU hang recovery
+and caused VK_ERROR_DEVICE_LOST on Adreno 6xx.
 ---
-
- src/freedreno/common/freedreno_ring.c | 22 +++++++++++++---------
+ src/freedreno/common/freedreno_ring.c | 18 ++++++++++++++----
  src/freedreno/common/freedreno_ring.h |  2 +-
- 2 files changed, 14 insertions(+), 10 deletions(-)
+ 2 files changed, 15 insertions(+), 5 deletions(-)
 
 diff --git a/src/freedreno/common/freedreno_ring.c b/src/freedreno/common/freedreno_ring.c
 index b3e23e9b00..c7f1a1e8a1 100644
 --- a/src/freedreno/common/freedreno_ring.c
 +++ b/src/freedreno/common/freedreno_ring.c
-@@ -512,15 +512,19 @@ void fd_ringbuffer_grow(struct fd_ringbuffer *ring, uint32_t ndwords)
+@@ -512,11 +512,23 @@ void fd_ringbuffer_grow(struct fd_ringbuffer *ring, uint32_t ndwords)
  
  void fd_ringbuffer_recover(struct fd_ringbuffer *ring)
  {
 -   if (!ring->parent)
 -      return;
 -
--   /* GPU hang recovery reworked: cleanup the entire chain */
 -   for (struct fd_ringbuffer *child = ring->parent->next;
 -        child; child = child->next)
 -      fd_ringbuffer_reset(child);
 -
 -   ring->parent->next = NULL;
-+   /* Old hang recovery: reset current ring only */
++   /* Reverted to old simple recovery path */
 +   if (!ring)
 +      return;
 +
