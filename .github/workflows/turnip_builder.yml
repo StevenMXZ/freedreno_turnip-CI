@@ -1,41 +1,53 @@
-name: Turnip Revert Build
+name: Build "turnip" (Mesa Main)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
+  schedule:
+  - cron: "20 5 1,15 * *"
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-
+  start_building_turnip:
+    runs-on: ubuntu-24.04
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set up environment
+    - name: Prepare environment
       run: |
+        # Habilita repositórios de código-fonte (deb-src) para 'apt build-dep'
+        sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
         sudo apt update
-        sudo apt install -y meson ninja-build patchelf unzip curl python3-pip flex bison zip git ccache
-        pip install mako
+        # Instala dependências de build do Mesa e ferramentas essenciais
+        sudo apt build-dep mesa -y
+        sudo apt install -y ccache python3-pip
+        pip install --upgrade meson ninja
+    
+    - name: Execute build script
+      run: bash ./turnip_builder.sh
 
-    - name: Run build script
-      run: |
-        chmod +x ./build_turnip_revert.sh
-        ./build_turnip_revert.sh
-
-    - name: Upload artifact
+    - name: Upload Logs as Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: turnip-revert-build
-        path: turnip_workdir/*.zip
+        name: build-logs
+        path: |
+          turnip_workdir/meson_log
+          turnip_workdir/ninja_log
+        if-no-files-found: ignore # Não falha se os logs não forem encontrados
 
-    - name: Create GitHub Release
+    - id: get_info
+      name: "Get release info"
+      run: |
+        # Lê os arquivos de info gerados pelo script
+        echo "RELEASE_NAME=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
+        echo "TAG_NAME=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
+        echo "BODY_PATH=turnip_workdir/description" >> "$GITHUB_OUTPUT"
+
+    - name: Release "turnip"
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: $(cat turnip_workdir/tag)
-        name: $(cat turnip_workdir/release)
-        body_path: turnip_workdir/description
+        body_path: ${{ steps.get_info.outputs.BODY_PATH }}
+        name: ${{ steps.get_info.outputs.RELEASE_NAME }}
+        tag_name: ${{ steps.get_info.outputs.TAG_NAME }}
+        # Usa um curinga para encontrar o .zip gerado, seja qual for o hash
         files: turnip_workdir/*.zip
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        draft: false
