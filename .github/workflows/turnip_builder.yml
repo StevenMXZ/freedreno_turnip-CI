@@ -1,28 +1,50 @@
-name: Build "turnip" (Mesa Revert Test)
+name: Build Turnip Revert (Unreal Fix)
 
 on:
   workflow_dispatch:
 
 jobs:
-  build_turnip_revert:
+  build_turnip:
     runs-on: ubuntu-24.04
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: Prepare environment
-        run: |
-          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt update
-          sudo apt build-dep mesa -y
-          sudo apt install -y ccache python3-pip git meson ninja-build unzip curl patchelf flex bison zip
-          pip install mako
+    - name: Install dependencies
+      run: |
+        sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+        sudo apt update
+        sudo apt build-dep mesa -y
+        sudo apt install -y ccache python3-pip patchelf zip unzip
+        pip install meson ninja mako
 
-      - name: Execute Revert Build Script
-        run: bash ./turnip_builder_revert.sh
+    - name: Run Turnip Revert build
+      run: bash ./turnip_builder.sh
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: turnip-revert-build
-          path: turnip_workdir/*.zip
+    - name: Upload logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs
+        path: |
+          turnip_workdir/meson_log
+          turnip_workdir/ninja_log
+
+    - name: Upload driver
+      uses: actions/upload-artifact@v4
+      with:
+        name: turnip-revert
+        path: turnip_workdir/*.zip
+
+    - name: Release to GitHub
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: Turnip-Revert
+        name: Turnip Revert (Unreal Freeze Fix)
+        body: |
+          Automatic Mesa revert build between:
+          - ✅ Good: 47619ef5
+          - ❌ Bad: 93f24f0b
+          Fixes periodic freezes on Unreal Engine titles.
+        files: turnip_workdir/*.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
