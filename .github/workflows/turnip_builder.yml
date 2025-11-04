@@ -17,8 +17,10 @@ jobs:
       - name: Rodar script
         run: bash .github/scripts/get_commits.sh
 
-      - name: Upload do resultado
+      - name: Upload dos resultados
         uses: actions/upload-artifact@v4
         with:
           name: mesa-commits-between
-          path: commits_between.txt
+          path: |
+            commits_between.txt
+            suspects.txt
