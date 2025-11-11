@@ -59,11 +59,11 @@ prepare_source(){
 	if [ -d mesa ]; then
 		rm -rf mesa
 	fi
-	# Clone completo é necessário para 'git apply'
 	git clone "$mesa_repo" mesa
 	
     # --- PATCH APLICADO AQUI ---
 	echo "Creating A6xx Vulkan 1.4 patch file..."
+	# CORREÇÃO: Corrigido o erro de digitação 'freeddreno' para 'freedreno'
 	cat <<'EOF' > "$workdir/vk14_a6xx.patch"
 --- a/src/freedreno/vulkan/meson.build
 +++ b/src/freedreno/vulkan/meson.build
