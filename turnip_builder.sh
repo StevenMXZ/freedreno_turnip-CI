@@ -22,6 +22,7 @@ version_str=""
 # ===========================
 
 check_deps(){
+    missing=0
 	echo "🔍 Checking system dependencies ..."
 	for dep in $deps; do
 		if ! command -v $dep >/dev/null 2>&1; then
@@ -34,6 +35,7 @@ check_deps(){
 	if [ "$missing" == "1" ]; then
 		echo "Please install missing dependencies." && exit 1
 	fi
+	# instalar mako se possível (silencioso)
 	pip install mako &> /dev/null || true
 }
 
@@ -49,7 +51,7 @@ prepare_ndk(){
 			unzip "${ndkver}-linux.zip" &> /dev/null
 		fi
 	else
-		echo "Using preinstalled Android NDK from GitHub Actions image."
+		echo "Using preinstalled Android NDK from environment."
 	fi
 }
 
@@ -60,10 +62,10 @@ prepare_source(){
 		rm -rf mesa
 	fi
 	git clone "$mesa_repo" mesa
-	
-    # --- PATCH APLICADO AQUI ---
+
+	# --- PATCH APLICADO AQUI ---
 	echo "Creating A6xx Vulkan 1.4 patch file..."
-	# CORREÇÃO: Números de linha e hunks corrigidos
+	# Observação: heredoc usa EOF com aspas simples para evitar expansão de variáveis
 	cat <<'EOF' > "$workdir/vk14_a6xx.patch"
 --- a/src/freedreno/vulkan/meson.build
 +++ b/src/freedreno/vulkan/meson.build
@@ -96,7 +98,7 @@ prepare_source(){
  
  VKAPI_ATTR VkResult VKAPI_CALL
  tu_EnumerateInstanceVersion(uint32_t *pApiVersion)
-@@ -791,20 +791,12 @@
+@@ -770,20 +770,12 @@
     snprintf(p->driverInfo, VK_MAX_DRIVER_INFO_SIZE,
              "Mesa " PACKAGE_VERSION MESA_GIT_SHA1);
     if (pdevice->info->chip >= 7) {
@@ -120,7 +122,7 @@ prepare_source(){
        };
     }
  
-@@ -814,9 +806,8 @@
+@@ -793,9 +785,8 @@
  
     props->apiVersion =
        (pdevice->info->a6xx.has_hw_multiview || TU_DEBUG(NOCONFORM)) ?
@@ -134,16 +136,23 @@ prepare_source(){
 EOF
 
 	cd mesa
+
 	echo -e "${green}Applying A6xx VK 1.4 patch using 'git apply'...${nocolor}"
-	if ! git apply "$workdir/vk14_a6xx.patch"; then
+	# aplicar o patch a partir do diretório do repo
+	if ! git apply --whitespace=nowarn "$workdir/vk14_a6xx.patch"; then
 		echo -e "${red}Patch failed to apply!${nocolor}"
+		echo "Run 'git apply --verbose $workdir/vk14_a6xx.patch' inside the mesa repo for more info."
 		exit 1
 	fi
 	echo -e "${green}Patch applied successfully.${nocolor}"
-    # --- FIM DO PATCH ---
+	# --- FIM DO PATCH ---
 
 	commit_hash=$(git rev-parse HEAD)
-	version_str=$(cat VERSION | xargs)
+	if [ -f VERSION ]; then
+	    version_str=$(cat VERSION | xargs)
+	else
+	    version_str="unknown"
+	fi
 
 	cd "$workdir"
 }
@@ -214,6 +223,7 @@ package_driver(){
 		exit 1
 	fi
 
+	rm -rf "$package_temp"
 	mkdir -p "$package_temp"
 	cp "$lib_path" "$package_temp/lib_temp.so"
 
@@ -247,7 +257,7 @@ generate_release_info() {
 	local short_hash=${commit_hash:0:7}
 
     echo "Mesa-Main-VK14-A6xx-${date_tag}-${short_hash}" > tag
-    
+
     echo "Turnip CI Build - ${date_tag} (Mesa Main + A6xx VK1.4 Patch)" > release
 
     echo "Automated Turnip CI build from the latest Mesa main branch." > description
@@ -256,7 +266,7 @@ generate_release_info() {
     echo "**Base:** Mesa main branch" >> description
     echo "**Patch Applied:** Force Vulkan 1.4 support for A6xx devices." >> description
     echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
-    
+
     echo -e "${green}Release info generated.${nocolor}"
 }
 
