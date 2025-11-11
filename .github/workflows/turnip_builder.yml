@@ -1,4 +1,4 @@
-name: Build "turnip" (Mesa Main)
+name: Build "turnip" (Mesa Main + MRs)
 
 on:
   workflow_dispatch:
@@ -14,10 +14,8 @@ jobs:
 
     - name: Prepare environment
       run: |
-        # Habilita repositórios de código-fonte (deb-src) para 'apt build-dep'
         sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
         sudo apt update
-        # Instala dependências de build do Mesa e ferramentas essenciais
         sudo apt build-dep mesa -y
         sudo apt install -y ccache python3-pip
         pip install --upgrade meson ninja
@@ -32,12 +30,11 @@ jobs:
         path: |
           turnip_workdir/meson_log
           turnip_workdir/ninja_log
-        if-no-files-found: ignore # Não falha se os logs não forem encontrados
+        if-no-files-found: ignore 
 
     - id: get_info
       name: "Get release info"
       run: |
-        # Lê os arquivos de info gerados pelo script
         echo "RELEASE_NAME=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
         echo "TAG_NAME=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
         echo "BODY_PATH=turnip_workdir/description" >> "$GITHUB_OUTPUT"
@@ -48,6 +45,5 @@ jobs:
         body_path: ${{ steps.get_info.outputs.BODY_PATH }}
         name: ${{ steps.get_info.outputs.RELEASE_NAME }}
         tag_name: ${{ steps.get_info.outputs.TAG_NAME }}
-        # Usa um curinga para encontrar o .zip gerado, seja qual for o hash
         files: turnip_workdir/*.zip
         draft: false
