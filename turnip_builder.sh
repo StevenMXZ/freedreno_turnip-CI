@@ -22,7 +22,6 @@ version_str=""
 # ===========================
 
 check_deps(){
-    missing=0
 	echo "🔍 Checking system dependencies ..."
 	for dep in $deps; do
 		if ! command -v $dep >/dev/null 2>&1; then
@@ -50,7 +49,7 @@ prepare_ndk(){
 			unzip "${ndkver}-linux.zip" &> /dev/null
 		fi
 	else
-		echo "Using preinstalled Android NDK from environment."
+		echo "Using preinstalled Android NDK from GitHub Actions image."
 	fi
 }
 
@@ -61,25 +60,27 @@ prepare_source(){
 	git clone --depth=1 "$mesa_repo" mesa
 	cd mesa
 
-	echo -e "${green}Applying A6xx VK 1.4 patch via sed...${nocolor}"
+	echo -e "${green}Applying A6xx VK 1.4 patch safely via sed...${nocolor}"
 
-	# Atualiza o Vulkan API version no meson.build
+	# 1️⃣ Força o Vulkan 1.4 no meson.build
 	sed -i 's/--api-version..1\.1./--api-version 1.4/' src/freedreno/vulkan/meson.build || true
 
-	# Atualiza a TU_API_VERSION para Vulkan 1.4
+	# 2️⃣ Atualiza TU_API_VERSION para Vulkan 1.4
 	sed -i 's/#define TU_API_VERSION VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/#define TU_API_VERSION VK_MAKE_VERSION(1, 4, VK_HEADER_VERSION)/' src/freedreno/vulkan/tu_device.cc || true
 
-	# Força o conformance version para A6xx
-	sed -i '/else {/a \
-      /* HACK: Force A6xx to report 1.4 conformance */\
-      p->conformanceVersion = (VkConformanceVersion) {\
-         .major = 1,\
-         .minor = 4,\
-         .subminor = 0,\
-         .patch = 0,\
-      };' src/freedreno/vulkan/tu_device.cc || true
+	# 3️⃣ Injeta o bloco de conformidade dentro de tu_GetPhysicalDeviceProperties2
+	sed -i '/tu_GetPhysicalDeviceProperties2/,/return;/ {
+  /return;/ i\
+   /* Force A6xx to report Vulkan 1.4 conformance */\
+   p->conformanceVersion = (VkConformanceVersion){\
+      .major = 1,\
+      .minor = 4,\
+      .subminor = 0,\
+      .patch = 0,\
+   };
+}' src/freedreno/vulkan/tu_device.cc || true
 
-	# Força uso do TU_API_VERSION principal
+	# 4️⃣ Substitui qualquer uso direto do VK_MAKE_VERSION(1,3,...) pelo TU_API_VERSION
 	sed -i 's/VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/TU_API_VERSION/' src/freedreno/vulkan/tu_device.cc || true
 
 	echo -e "${green}✅ VK1.4 modifications for A6xx applied successfully.${nocolor}"
@@ -152,6 +153,7 @@ package_driver(){
 	local build_dir="$source_dir/build"
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
+	local description_name="Mesa Main (A6xx VK1.4 Patch)"
 	local output_suffix="vk14_a6xx"
 
 	if [ ! -f "$lib_path" ]; then
@@ -159,7 +161,6 @@ package_driver(){
 		exit 1
 	fi
 
-	rm -rf "$package_temp"
 	mkdir -p "$package_temp"
 	cp "$lib_path" "$package_temp/lib_temp.so"
 
@@ -167,6 +168,7 @@ package_driver(){
 	patchelf --set-soname "vulkan.adreno.so" lib_temp.so
 	mv lib_temp.so "vulkan.ad07XX.so"
 
+	local date_meta=$(date +'%b %d, %Y')
 	local short_hash=${commit_hash:0:7}
 	local meta_name="Turnip-Main-${short_hash}-VK14-A6xx"
 	cat <<EOF > meta.json
@@ -185,20 +187,23 @@ EOF
 	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
 }
 
-generate_release_info(){
+generate_release_info() {
     echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
     echo "Mesa-Main-VK14-A6xx-${date_tag}-${short_hash}" > tag
+    
     echo "Turnip CI Build - ${date_tag} (Mesa Main + A6xx VK1.4 Patch)" > release
+
     echo "Automated Turnip CI build from the latest Mesa main branch." > description
     echo "" >> description
     echo "### Build Details:" >> description
     echo "**Base:** Mesa main branch" >> description
     echo "**Patch Applied:** Force Vulkan 1.4 support for A6xx devices." >> description
     echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
+    
     echo -e "${green}Release info generated.${nocolor}"
 }
 
