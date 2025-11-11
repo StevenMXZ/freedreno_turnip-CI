@@ -63,7 +63,7 @@ prepare_source(){
 	
     # --- PATCH APLICADO AQUI ---
 	echo "Creating A6xx Vulkan 1.4 patch file..."
-	# CORREÇÃO: Corrigido o erro de digitação 'freeddreno' para 'freedreno'
+	# CORREÇÃO: Números de linha e hunks corrigidos
 	cat <<'EOF' > "$workdir/vk14_a6xx.patch"
 --- a/src/freedreno/vulkan/meson.build
 +++ b/src/freedreno/vulkan/meson.build
@@ -96,7 +96,7 @@ prepare_source(){
  
  VKAPI_ATTR VkResult VKAPI_CALL
  tu_EnumerateInstanceVersion(uint32_t *pApiVersion)
-@@ -770,20 +770,12 @@
+@@ -791,20 +791,12 @@
     snprintf(p->driverInfo, VK_MAX_DRIVER_INFO_SIZE,
              "Mesa " PACKAGE_VERSION MESA_GIT_SHA1);
     if (pdevice->info->chip >= 7) {
@@ -120,7 +120,7 @@ prepare_source(){
        };
     }
  
-@@ -793,9 +785,8 @@
+@@ -814,9 +806,8 @@
  
     props->apiVersion =
        (pdevice->info->a6xx.has_hw_multiview || TU_DEBUG(NOCONFORM)) ?
