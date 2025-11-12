@@ -126,8 +126,10 @@ compile_mesa(){
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
-c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
-cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+# ADICIONADO: -Dandroid-strict=false
+c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path', '-Dandroid-strict=false']
+# ADICIONADO: -Dandroid-strict=false
+cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-Dandroid-strict=false', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk_bin_path/aarch64-linux-android-strip'
@@ -212,8 +214,7 @@ generate_release_info() {
     echo "### Build Details:" >> description
     echo "**Base:** Mesa main branch" >> description
     echo "**Patch Applied:** Force Vulkan 1.4 support for A6xx devices." >> description
-	# CORREÇÃO: Descrição do MR atualizada
-    echo "**Merged MR:** \`!${merge_request_num}\` (Draft: turnip: Implement VK_QCOM_multiview_per_view_* and bin merging optimizations)" >> description
+	echo "**Merged MR:** \`!${merge_request_num}\` (Draft: turnip: Implement VK_QCOM_multiview_per_view_* and bin merging optimizations)" >> description
     echo "**Commit (após merge/patch):** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
