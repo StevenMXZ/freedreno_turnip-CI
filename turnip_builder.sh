@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Build Script (Mesa Main + A6xx VK1.4 Patch)
+# Turnip Build Script (Mesa Main + A6xx VK1.4 Patch + MR 35894)
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -13,6 +13,8 @@ ndkver="android-ndk-r29"
 sdkver="35"
 
 mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
+# MR a ser mesclado
+merge_request_num="35894"
 
 commit_hash=""
 version_str=""
@@ -57,18 +59,28 @@ prepare_source(){
 	echo "🌿 Preparing Mesa source (Main Branch)..."
 	cd "$workdir"
 	rm -rf mesa
-	git clone --depth=1 "$mesa_repo" mesa
+	git clone "$mesa_repo" mesa
 	cd mesa
 
+	# --- 1. APLICAR O MERGE REQUEST ---
+	echo -e "${green}Configuring local git identity for merge...${nocolor}"
+	git config user.name "CI Builder"
+	git config user.email "ci@builder.com"
+	
+	echo -e "${green}Fetching Merge Request !${merge_request_num}...${nocolor}"
+	git fetch origin "refs/merge-requests/${merge_request_num}/head"
+	
+	echo -e "${green}Merging fetched MR !${merge_request_num} into main branch...${nocolor}"
+	if ! git merge --no-edit FETCH_HEAD; then
+		echo -e "${red}Merge failed for MR !${merge_request_num}. Conflicts might need manual resolution.${nocolor}"
+		exit 1
+	fi
+	echo -e "${green}Merge !${merge_request_num} successful!${nocolor}\n"
+
+	# --- 2. APLICAR O PATCH VK 1.4 (com sed) ---
 	echo -e "${green}Applying A6xx VK 1.4 patch safely via sed...${nocolor}"
-
-	# 1️⃣ Força o Vulkan 1.4 no meson.build
 	sed -i 's/--api-version..1\.1./--api-version 1.4/' src/freedreno/vulkan/meson.build || true
-
-	# 2️⃣ Atualiza TU_API_VERSION para Vulkan 1.4
 	sed -i 's/#define TU_API_VERSION VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/#define TU_API_VERSION VK_MAKE_VERSION(1, 4, VK_HEADER_VERSION)/' src/freedreno/vulkan/tu_device.cc || true
-
-	# 3️⃣ Injeta o bloco de conformidade dentro de tu_GetPhysicalDeviceProperties2
 	sed -i '/tu_GetPhysicalDeviceProperties2/,/return;/ {
   /return;/ i\
    /* Force A6xx to report Vulkan 1.4 conformance */\
@@ -79,11 +91,9 @@ prepare_source(){
       .patch = 0,\
    };
 }' src/freedreno/vulkan/tu_device.cc || true
-
-	# 4️⃣ Substitui qualquer uso direto do VK_MAKE_VERSION(1,3,...) pelo TU_API_VERSION
 	sed -i 's/VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/TU_API_VERSION/' src/freedreno/vulkan/tu_device.cc || true
-
 	echo -e "${green}✅ VK1.4 modifications for A6xx applied successfully.${nocolor}"
+	# --- FIM DOS PATCHES ---
 
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -96,11 +106,11 @@ prepare_source(){
 }
 
 compile_mesa(){
-	echo -e "${green}⚙️ Compiling Mesa (Main Branch + A6xx VK1.4 Patch)...${nocolor}"
+	echo -e "${green}⚙️ Compiling Mesa (Main + VK1.4 Patch + MR !${merge_request_num})...${nocolor}"
 
 	local source_dir="$workdir/mesa"
 	local build_dir="$source_dir/build"
-	local description="Mesa Main (A6xx VK1.4 Patch)"
+	local description="Mesa Main (A6xx VK1.4 Patch + MR !${merge_request_num})"
 
 	local ndk_root_path
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
@@ -153,8 +163,8 @@ package_driver(){
 	local build_dir="$source_dir/build"
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
-	local description_name="Mesa Main (A6xx VK1.4 Patch)"
-	local output_suffix="vk14_a6xx"
+	local description_name="Mesa Main (A6xx VK1.4 Patch + MR !${merge_request_num})"
+	local output_suffix="vk14_a6xx_mr${merge_request_num}"
 
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
@@ -170,12 +180,12 @@ package_driver(){
 
 	local date_meta=$(date +'%b %d, %Y')
 	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-Main-${short_hash}-VK14-A6xx"
+	local meta_name="Turnip-Main-${short_hash}-VK14-A6xx-MR${merge_request_num}"
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Built from Mesa main branch + A6xx VK1.4 Patch. Commit $commit_hash",
+  "description": "Built from Mesa main + A6xx VK1.4 Patch + MR !${merge_request_num}. Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
@@ -193,16 +203,18 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Mesa-Main-VK14-A6xx-${date_tag}-${short_hash}" > tag
+    echo "Mesa-Main-VK14-A6xx-MR${merge_request_num}-${date_tag}-${short_hash}" > tag
     
-    echo "Turnip CI Build - ${date_tag} (Mesa Main + A6xx VK1.4 Patch)" > release
+    echo "Turnip CI Build - ${date_tag} (Main + A6xx VK1.4 Patch + MR !${merge_request_num})" > release
 
     echo "Automated Turnip CI build from the latest Mesa main branch." > description
     echo "" >> description
     echo "### Build Details:" >> description
     echo "**Base:** Mesa main branch" >> description
     echo "**Patch Applied:** Force Vulkan 1.4 support for A6xx devices." >> description
-    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
+	# CORREÇÃO: Descrição do MR atualizada
+    echo "**Merged MR:** \`!${merge_request_num}\` (Draft: turnip: Implement VK_QCOM_multiview_per_view_* and bin merging optimizations)" >> description
+    echo "**Commit (após merge/patch):** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
 }
