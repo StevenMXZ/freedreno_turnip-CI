@@ -24,6 +24,7 @@ version_str=""
 # ===========================
 
 check_deps(){
+    missing=0
 	echo "🔍 Checking system dependencies ..."
 	for dep in $deps; do
 		if ! command -v $dep >/dev/null 2>&1; then
@@ -36,6 +37,7 @@ check_deps(){
 	if [ "$missing" == "1" ]; then
 		echo "Please install missing dependencies." && exit 1
 	fi
+	# instala mako silenciosamente (não fatal)
 	pip install mako &> /dev/null || true
 }
 
@@ -51,7 +53,7 @@ prepare_ndk(){
 			unzip "${ndkver}-linux.zip" &> /dev/null
 		fi
 	else
-		echo "Using preinstalled Android NDK from GitHub Actions image."
+		echo "Using preinstalled Android NDK from environment."
 	fi
 }
 
@@ -59,8 +61,17 @@ prepare_source(){
 	echo "🌿 Preparing Mesa source (Main Branch)..."
 	cd "$workdir"
 	rm -rf mesa
-	git clone "$mesa_repo" mesa
+	# clone raso (profundidade 1 para CI)
+	git clone --depth=1 "$mesa_repo" mesa
 	cd mesa
+
+	# garantir main
+	if git show-ref --verify --quiet refs/heads/main; then
+	    git checkout main
+	else
+	    # fallback para master se não existir main
+	    git checkout -B main || true
+	fi
 
 	# --- 1. APLICAR O MERGE REQUEST ---
 	echo -e "${green}Configuring local git identity for merge...${nocolor}"
@@ -68,10 +79,14 @@ prepare_source(){
 	git config user.email "ci@builder.com"
 	
 	echo -e "${green}Fetching Merge Request !${merge_request_num}...${nocolor}"
-	git fetch origin "refs/merge-requests/${merge_request_num}/head"
-	
+	# GitLab: fetch MR ref
+	if ! git fetch origin "refs/merge-requests/${merge_request_num}/head":mr_${merge_request_num}; then
+		echo -e "${red}Failed to fetch MR !${merge_request_num}. It may not exist or network issue.${nocolor}"
+		exit 1
+	fi
+
 	echo -e "${green}Merging fetched MR !${merge_request_num} into main branch...${nocolor}"
-	if ! git merge --no-edit FETCH_HEAD; then
+	if ! git merge --no-edit "mr_${merge_request_num}"; then
 		echo -e "${red}Merge failed for MR !${merge_request_num}. Conflicts might need manual resolution.${nocolor}"
 		exit 1
 	fi
@@ -79,9 +94,22 @@ prepare_source(){
 
 	# --- 2. APLICAR O PATCH VK 1.4 (com sed) ---
 	echo -e "${green}Applying A6xx VK 1.4 patch safely via sed...${nocolor}"
-	sed -i 's/--api-version..1\.1./--api-version 1.4/' src/freedreno/vulkan/meson.build || true
-	sed -i 's/#define TU_API_VERSION VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/#define TU_API_VERSION VK_MAKE_VERSION(1, 4, VK_HEADER_VERSION)/' src/freedreno/vulkan/tu_device.cc || true
-	sed -i '/tu_GetPhysicalDeviceProperties2/,/return;/ {
+
+	# 1) Força o Vulkan 1.4 no meson.build (freedreno ICD generator)
+	if [ -f src/freedreno/vulkan/meson.build ]; then
+		sed -i 's/--api-version.*1\.1.*/--api-version 1.4/' src/freedreno/vulkan/meson.build || true
+	fi
+
+	# 2) Atualiza TU_API_VERSION para Vulkan 1.4
+	if [ -f src/freedreno/vulkan/tu_device.cc ]; then
+		sed -i 's/#define TU_API_VERSION VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/#define TU_API_VERSION VK_MAKE_VERSION(1, 4, VK_HEADER_VERSION)/' src/freedreno/vulkan/tu_device.cc || true
+
+		# 3) Injeta o bloco de conformidade dentro da função correta (tu_GetPhysicalDeviceProperties2)
+		# Observação: inserimos apenas antes do 'return;' dentro do escopo da função.
+		sed -n '1,4000p' src/freedreno/vulkan/tu_device.cc >/tmp/tu_device_snippet.$$
+		if grep -q "tu_GetPhysicalDeviceProperties2" /tmp/tu_device_snippet.$$; then
+			# editar in-place com sed range (função .. return;)
+			sed -i '/tu_GetPhysicalDeviceProperties2/,/return;/ {
   /return;/ i\
    /* Force A6xx to report Vulkan 1.4 conformance */\
    p->conformanceVersion = (VkConformanceVersion){\
@@ -91,7 +119,12 @@ prepare_source(){
       .patch = 0,\
    };
 }' src/freedreno/vulkan/tu_device.cc || true
-	sed -i 's/VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/TU_API_VERSION/' src/freedreno/vulkan/tu_device.cc || true
+		fi
+		rm -f /tmp/tu_device_snippet.$$
+		# 4) Substitui VK_MAKE_VERSION(1,3,...) por TU_API_VERSION onde apropriado
+		sed -i 's/VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/TU_API_VERSION/g' src/freedreno/vulkan/tu_device.cc || true
+	fi
+
 	echo -e "${green}✅ VK1.4 modifications for A6xx applied successfully.${nocolor}"
 	# --- FIM DOS PATCHES ---
 
@@ -126,10 +159,8 @@ compile_mesa(){
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
-# ADICIONADO: -Dandroid-strict=false
-c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path', '-Dandroid-strict=false']
-# ADICIONADO: -Dandroid-strict=false
-cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-Dandroid-strict=false', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+c = '$ndk_bin_path/aarch64-linux-android$sdkver-clang'
+cpp = '$ndk_bin_path/aarch64-linux-android$sdkver-clang++'
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk_bin_path/aarch64-linux-android-strip'
@@ -142,6 +173,13 @@ EOF
 
 	cd "$source_dir"
 
+	# EXPORT que podem ajudar Meson a não procurar librt em build host
+	# (NDK toolchain deve prover o que precisa)
+	export LIBRT_LIBS=""
+	export CFLAGS="-D__ANDROID__"
+	export CXXFLAGS="-D__ANDROID__"
+
+	# Meson setup: incluí flags para ambiente Android e para ignorar have_librt
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -155,7 +193,17 @@ EOF
 		-Dshared-glapi=enabled \
 		-Db_lto=true \
 		-Dvulkan-beta=true \
+		-Dandroid_strict=false \
+		-Dhave_librt=false \
+		-Ddefault_library=shared \
+		-Dc_args='-D__ANDROID__' \
 		2>&1 | tee "$workdir/meson_log"
+
+	# checar se meson gerou build.ninja
+	if [ ! -f "$build_dir/build.ninja" ]; then
+		echo -e "${red}meson setup failed — see $workdir/meson_log for details${nocolor}"
+		exit 1
+	fi
 
 	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
 }
@@ -173,6 +221,7 @@ package_driver(){
 		exit 1
 	fi
 
+	rm -rf "$package_temp"
 	mkdir -p "$package_temp"
 	cp "$lib_path" "$package_temp/lib_temp.so"
 
