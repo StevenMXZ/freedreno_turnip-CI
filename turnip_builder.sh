@@ -14,11 +14,11 @@ sdkver="35"
 # Repositório oficial (upstream)
 mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
 
-# LISTA DAS NOVAS COMMITS PARA TESTAR (Lote 4)
+# LISTA DAS NOVAS COMMITS PARA TESTAR (Lote 5)
 commits_to_build=(
-    "639d7946c71"
-    "e3fa9c224a7"
-    "4b2a4dce787"
+    "d8a19711ed1"
+    "77b96ac0a74"
+    "83212054e07"
 )
 
 # Variáveis dinâmicas
@@ -204,8 +204,8 @@ generate_release_info() {
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
     
-    echo "Batch-Test-${date_tag}-Set4" > tag
-    echo "Turnip Batch Test (Set 4) - ${date_tag}" > release
+    echo "Batch-Test-${date_tag}-Set5" > tag
+    echo "Turnip Batch Test (Set 5) - ${date_tag}" > release
     
     echo "Automated Batch Test of specific commits." > description
     echo "" >> description
