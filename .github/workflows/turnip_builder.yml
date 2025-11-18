@@ -17,6 +17,7 @@ jobs:
           meson ninja-build patchelf unzip curl python3-pip \
           flex bison zip git ccache glslang-tools \
           pkg-config build-essential
+        pip3 install mako
 
     - name: Run bisect script
       run: |
