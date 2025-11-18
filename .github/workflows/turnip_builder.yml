@@ -1,47 +1,27 @@
-name: Build and Release Turnip (PixelyIon)
+name: Turnip Bisect
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "20 5 1,15 * *"
 
 jobs:
-  build_and_release:
-    name: Build and Release Turnip
+  bisect:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v3
 
-      - name: Prepare Build Environment
-        run: |
-          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get update
-          sudo apt-get build-dep mesa -y
-          pip install --upgrade meson ninja
+    - name: Install deps
+      run: |
+        sudo apt update
+        sudo apt install -y meson ninja-build patchelf unzip curl python3-pip flex bison zip git ccache
 
-      - name: Execute Build Script
-        run: bash ./turnip_builder.sh
+    - name: Run bisect script
+      run: |
+        chmod +x bisect_turnip_only.sh
+        ./bisect_turnip_only.sh
 
-      - name: Get Release Info
-        id: get_info
-        run: |
-          echo "TAG_NAME=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
-          echo "BODY_PATH=turnip_workdir/description" >> "$GITHUB_OUTPUT"
-
-      - name: Upload Logs as Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: |
-            turnip_workdir/meson_log_*
-            turnip_workdir/ninja_log_*
-        continue-on-error: true # Não falha se os logs não forem encontrados
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.get_info.outputs.TAG_NAME }}
-          body_path: ${{ steps.get_info.outputs.BODY_PATH }}
-          files: turnip_workdir/*.zip # Pega o zip gerado
-          draft: false
+    - name: Upload bisect builds
+      uses: actions/upload-artifact@v3
+      with:
+        name: turnip-bisect-results
+        path: turnip_workdir/*.zip
