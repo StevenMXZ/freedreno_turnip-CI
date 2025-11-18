@@ -1,4 +1,10 @@
-#!/bin/bash -e
+#!/usr/bin/env bash
+set -e
+
+# Fix para GitHub Actions (sem terminal)
+export TERM=xterm
+export GIT_PAGER=cat
+export LESS=R
 green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
