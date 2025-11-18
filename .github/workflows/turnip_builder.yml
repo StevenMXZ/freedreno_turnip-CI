@@ -8,20 +8,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    # Baixa o repositório
     - uses: actions/checkout@v4
 
-    - - name: Install deps
+    # Instala todas as dependências para compilar o Mesa/Turnip
+    - name: Install deps
       run: |
         sudo apt update
         sudo apt install -y \
           meson ninja-build patchelf unzip curl python3-pip \
           flex bison zip git ccache glslang-tools
 
+    # Executa o script de bisect do Turnip
     - name: Run bisect script
       run: |
         chmod +x bisect_turnip_only.sh
         ./bisect_turnip_only.sh
 
+    # Faz upload das builds geradas
     - name: Upload bisect builds
       uses: actions/upload-artifact@v4
       with:
