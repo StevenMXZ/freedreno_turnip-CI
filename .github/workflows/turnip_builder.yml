@@ -10,10 +10,12 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install deps
+    - - name: Install deps
       run: |
         sudo apt update
-        sudo apt install -y meson ninja-build patchelf unzip curl python3-pip flex bison zip git ccache
+        sudo apt install -y \
+          meson ninja-build patchelf unzip curl python3-pip \
+          flex bison zip git ccache glslang-tools
 
     - name: Run bisect script
       run: |
