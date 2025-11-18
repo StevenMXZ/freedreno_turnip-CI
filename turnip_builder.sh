@@ -11,15 +11,14 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
-
-# NOTA: Se os commits não forem encontrados, troque para o fork correto (ex: Danil)
+# Repositório oficial (upstream)
 mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
 
-# LISTA DAS NOVAS COMMITS PARA TESTAR
+# LISTA DAS NOVAS COMMITS PARA TESTAR (Lote 3)
 commits_to_build=(
-    "f61fe79fc0c"
-    "8c8496e2f64"
-    "1eef2a65c7a"
+    "52d028e06c3"
+    "5ee7a4c1e9d"
+    "130972c52ff"
 )
 
 # Variáveis dinâmicas
@@ -205,8 +204,8 @@ generate_release_info() {
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
     
-    echo "Batch-Test-${date_tag}-Set2" > tag
-    echo "Turnip Batch Test (Set 2) - ${date_tag}" > release
+    echo "Batch-Test-${date_tag}-Set3" > tag
+    echo "Turnip Batch Test (Set 3) - ${date_tag}" > release
     
     echo "Automated Batch Test of specific commits." > description
     echo "" >> description
