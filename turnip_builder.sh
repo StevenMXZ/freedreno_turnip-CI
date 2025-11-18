@@ -11,6 +11,7 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
+# Certifique-se de que este é o repo correto onde os commits existem
 mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
 
 # LISTA DAS 3 PRIMEIRAS COMMITS PARA TESTAR
@@ -125,12 +126,13 @@ cpu = 'armv8'
 endian = 'little'
 EOF
 
-    # Configurações de ambiente
+    # Configurações de ambiente para evitar problemas de librt/libdl
 	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
     echo "⚙️ Configuring Meson for $commit_id..."
+    # REMOVIDO: -Dhave_librt=false (causava erro)
 	meson setup build --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -144,7 +146,6 @@ EOF
 		-Dshared-glapi=enabled \
 		-Db_lto=true \
 		-Dvulkan-beta=true \
-		-Dhave_librt=false \
 		-Ddefault_library=shared \
 		-Dc_args='-D__ANDROID__' \
 		2>&1 | tee "$workdir/meson_log_$current_short"
@@ -156,7 +157,6 @@ EOF
     local lib_path="build/src/freedreno/vulkan/libvulkan_freedreno.so"
     if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed for $commit_id${nocolor}"
-        # Não sai do script, tenta a próxima commit
         return 
 	fi
 
@@ -202,8 +202,6 @@ generate_release_info() {
     echo "### Commits in this release:" >> description
     
     for commit in "${commits_to_build[@]}"; do
-        # Pega o short hash apenas para o link/descrição (assumindo que existe no repo agora)
-        # Nota: O short hash real pode variar, mas usamos o input para referência
         echo "- Commit: \`$commit\`" >> description
     done
 }
