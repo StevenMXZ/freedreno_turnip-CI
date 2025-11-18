@@ -11,14 +11,15 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
-# Certifique-se de que este é o repo correto onde os commits existem
+
+# NOTA: Se os commits não forem encontrados, troque para o fork correto (ex: Danil)
 mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
 
-# LISTA DAS 3 PRIMEIRAS COMMITS PARA TESTAR
+# LISTA DAS NOVAS COMMITS PARA TESTAR
 commits_to_build=(
-    "162b6040435"
-    "b6c1881d291"
-    "c5e2e26f499"
+    "f61fe79fc0c"
+    "8c8496e2f64"
+    "1eef2a65c7a"
 )
 
 # Variáveis dinâmicas
@@ -33,6 +34,7 @@ clear
 # ===========================
 
 check_deps(){
+    missing=0
 	echo "🔍 Checking system dependencies ..."
 	for dep in $deps; do
 		if ! command -v $dep >/dev/null 2>&1; then
@@ -84,8 +86,11 @@ build_commit(){
     
     cd "$workdir/mesa"
     
-    # Força o checkout limpo da commit específica
-    git checkout -f "$commit_id"
+    # Tenta fazer o checkout. Se falhar, avisa e pula.
+    if ! git checkout -f "$commit_id"; then
+        echo -e "${red}Commit $commit_id not found! Check if you are using the correct repo URL.${nocolor}"
+        return
+    fi
     
     current_commit=$(git rev-parse HEAD)
     current_short=$(git rev-parse --short HEAD)
@@ -114,6 +119,7 @@ build_commit(){
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
+# Usando --sysroot para garantir compatibilidade de bibliotecas
 c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
 cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
@@ -126,14 +132,13 @@ cpu = 'armv8'
 endian = 'little'
 EOF
 
-    # Configurações de ambiente para evitar problemas de librt/libdl
+    # Configurações de ambiente
 	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
     echo "⚙️ Configuring Meson for $commit_id..."
-    # REMOVIDO: -Dhave_librt=false (causava erro)
-	meson setup build --cross-file "$cross_file" \
+	if ! meson setup build --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
 		-Dplatform-sdk-version=$sdkver \
@@ -148,15 +153,21 @@ EOF
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
 		-Dc_args='-D__ANDROID__' \
-		2>&1 | tee "$workdir/meson_log_$current_short"
+		2>&1 | tee "$workdir/meson_log_$current_short"; then
+            echo -e "${red}Meson configuration failed for $commit_id${nocolor}"
+            return
+    fi
 
     echo "🔨 Compiling $commit_id..."
-	ninja -C build 2>&1 | tee "$workdir/ninja_log_$current_short"
+	if ! ninja -C build 2>&1 | tee "$workdir/ninja_log_$current_short"; then
+        echo -e "${red}Compilation failed for $commit_id${nocolor}"
+        return
+    fi
     
     # Empacotamento
     local lib_path="build/src/freedreno/vulkan/libvulkan_freedreno.so"
     if [ ! -f "$lib_path" ]; then
-		echo -e "${red}Build failed for $commit_id${nocolor}"
+		echo -e "${red}Build failed for $commit_id (Lib not found)${nocolor}"
         return 
 	fi
 
@@ -194,8 +205,8 @@ generate_release_info() {
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
     
-    echo "Batch-Test-${date_tag}" > tag
-    echo "Turnip Batch Test - ${date_tag}" > release
+    echo "Batch-Test-${date_tag}-Set2" > tag
+    echo "Turnip Batch Test (Set 2) - ${date_tag}" > release
     
     echo "Automated Batch Test of specific commits." > description
     echo "" >> description
