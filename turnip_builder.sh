@@ -4,16 +4,18 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Build Script (PixelyIon Fork)
+# Turnip Build Script (Mesa Main - With commit removal)
 # ===========================
+
+GOOD_COMMIT="47619ef5389c44cb92066c20409e6a9617d685fb"
+BAD_COMMIT="93f24f0bd02916d9ce4cc452312c19e9cca5d299"
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
 
-mesa_repo="https://gitlab.freedesktop.org/PixelyIon/mesa.git"
-target_branch="tu-newat"
+mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
 
 commit_hash=""
 version_str=""
@@ -40,6 +42,7 @@ check_deps(){
 
 prepare_ndk(){
 	echo "📦 Preparing Android NDK ..."
+	mkdir -p "$workdir"
 	cd "$workdir"
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		if [ ! -d "$ndkver" ]; then
@@ -54,58 +57,43 @@ prepare_ndk(){
 }
 
 prepare_source(){
-	echo "🌿 Preparing Mesa source (PixelyIon fork)..."
+	echo "🌿 Preparing Mesa source (Main Branch)..."
 	cd "$workdir"
-	if [ -d mesa ]; then
-		rm -rf mesa
-	fi
-	git clone "$mesa_repo" mesa
+	rm -rf mesa
+	git clone --depth=1 "$mesa_repo" -b main mesa
 	cd mesa
-	git checkout "$target_branch"
+
+	echo "🔻 Fetching full history to allow commit rollback..."
+	git fetch --unshallow
+
+	echo "🔧 Reverting commits between GOOD and BAD commits..."
+	COMMITS=$(git rev-list ${GOOD_COMMIT}..${BAD_COMMIT})
+
+	for c in $COMMITS; do
+		echo "⏪ Reverting commit: $c"
+		git revert --no-edit $c || {
+			echo -e "${red}❌ Failed to revert $c — manual conflict?${nocolor}"
+			exit 1
+		}
+	done
 
 	commit_hash=$(git rev-parse HEAD)
-	version_str=$(cat VERSION | xargs)
 
-	echo -e "${green}Applying autotune patch...${nocolor}"
-	# Usando 'git apply' para melhor detecção de erros
-	if ! patch -p1 <<'EOF'
-diff --git a/src/freedreno/vulkan/tu_autotune.cc b/src/freedreno/vulkan/tu_autotune.cc
-index 9d084349ca7..f15111813db 100644
---- a/src/freedreno/vulkan/tu_autotune.cc
-+++ b/src/freedreno/vulkan/tu_autotune.cc
-@@ -1140,14 +1140,6 @@ struct tu_autotune::rp_history {
-                bool enough_samples = sysmem_ema.count >= MIN_LOCK_DURATION_COUNT && gmem_ema.count >= MIN_LOCK_DURATION_COUNT;
-                uint64_t min_avg = MIN2(avg_sysmem, avg_gmem), max_avg = MAX2(avg_sysmem, avg_gmem);
-                uint64_t percent_diff = (100 * (max_avg - min_avg)) / min_avg;
--
--               if (has_resolved && enough_samples && max_avg >= MIN_LOCK_THRESHOLD && percent_diff >= LOCK_PERCENT_DIFF) {
--                  if (avg_gmem < avg_sysmem)
--                     sysmem_prob = 0;
--                  else
--                     sysmem_prob = 100;
--                  locked = true;
--               }
-             }
-          }
-EOF
-	then
-		echo -e "${red}Patch failed to apply!${nocolor}"
-		exit 1
+	if [ -f VERSION ]; then
+	    version_str=$(cat VERSION | xargs)
+	else
+	    version_str="unknown"
 	fi
-	echo -e "${green}Patch applied successfully.${nocolor}"
-
-	# Atualiza o hash do commit APÓS o patch, se o patch mudar o histórico (o que 'patch -p1' não faz, mas é uma boa prática)
-	commit_hash=$(git rev-parse HEAD)
 
 	cd "$workdir"
 }
 
 compile_mesa(){
-	echo -e "${green}⚙️ Compiling Mesa (PixelyIon Fork)...${nocolor}"
+	echo -e "${green}⚙️ Compiling Mesa (Main Branch)...${nocolor}"
 
 	local source_dir="$workdir/mesa"
 	local build_dir="$source_dir/build"
-
+	
 	local ndk_root_path
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		ndk_root_path="$workdir/$ndkver"
@@ -134,6 +122,10 @@ EOF
 
 	cd "$source_dir"
 
+	export LIBRT_LIBS=""
+	export CFLAGS="-D__ANDROID__"
+	export CXXFLAGS="-D__ANDROID__"
+
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -146,9 +138,12 @@ EOF
 		-Dglx=disabled \
 		-Dshared-glapi=enabled \
 		-Db_lto=true \
-		2>&1 | tee "$workdir/meson_log_pixelyion"
+		-Dvulkan-beta=true \
+		-Dhave_librt=false \
+		-Ddefault_library=shared \
+		2>&1 | tee "$workdir/meson_log"
 
-	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log_pixelyion"
+	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
 }
 
 package_driver(){
@@ -156,12 +151,13 @@ package_driver(){
 	local build_dir="$source_dir/build"
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
-
+	
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
 		exit 1
 	fi
 
+	rm -rf "$package_temp"
 	mkdir -p "$package_temp"
 	cp "$lib_path" "$package_temp/lib_temp.so"
 
@@ -170,39 +166,41 @@ package_driver(){
 	mv lib_temp.so "vulkan.ad07XX.so"
 
 	local date_meta=$(date +'%b %d, %Y')
+	local short_hash=${commit_hash:0:7}
+	local meta_name="Turnip-Main-${short_hash}"
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip (PixelyIon) - $date_meta",
-  "description": "Built from PixelyIon fork with custom autotune patch.",
+  "name": "$meta_name",
+  "description": "Built from Mesa main branch with problematic commit range reverted. Final HEAD: $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-	local zip_name="turnip_pixelyion_$(date +'%Y%m%d')_${commit_hash:0:7}.zip"
+	local zip_name="turnip_$(date +'%Y%m%d')_${short_hash}.zip"
 	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
 	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
 }
 
-# --- ADICIONADO: Função para gerar arquivos para a Ação do GitHub ---
 generate_release_info() {
     echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    # 1. Cria o arquivo 'tag'
-    echo "PixelyIon-${date_tag}-${short_hash}" > tag
+    echo "Mesa-Main-${date_tag}-${short_hash}-reverted" > tag
+    
+    echo "Turnip CI Build - ${date_tag} (Mesa Main - reverted commits)" > release
 
-    # 2. Cria o arquivo 'description'
-    echo "Automated Turnip CI build from PixelyIon's Mesa fork." > description
+    echo "Automated Turnip CI build from Mesa main branch with reverted commits." > description
     echo "" >> description
-    echo "### Build Details:" >> description
-    echo "**Base:** PixelyIon's Mesa fork, branch \`$target_branch\`" >> description
-    echo "**Patch Applied:** Remove autotune lock logic from \`tu_autotune.cc\`." >> description
-    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
+    echo "### Reverted commit range" >> description
+    echo "- GOOD: ${GOOD_COMMIT}" >> description
+    echo "- BAD: ${BAD_COMMIT}" >> description
+    echo "" >> description
+    echo "**Final Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
 }
@@ -212,11 +210,10 @@ generate_release_info() {
 # ===========================
 clear
 check_deps
-mkdir -p "$workdir"
 prepare_ndk
 prepare_source
 compile_mesa
 package_driver
-generate_release_info # <-- ADICIONADO
+generate_release_info
 
 echo -e "${green}🎉 Build completed successfully!${nocolor}"
