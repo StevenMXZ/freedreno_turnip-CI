@@ -82,19 +82,22 @@ endian = 'little'
 EOF
 
     cd "$src"
-    meson setup "$build" \
-        --cross-file "$cross" \
-        -Dbuildtype=release \
-        -Dplatforms=android \
-        -Dandroid-stub=true \
-        -Dplatform-sdk-version=$sdkver \
-        -Dgallium-drivers= \
-        -Dfreedreno-kmds=kgsl \
-        -Dshared-glapi=enabled \
-        -Dvulkan-beta=true \
-        -Dvulkan-drivers=freedreno \
-        -Db_lto=true \
-        -Ddefault_library=shared
+    meson setup "$build_dir" --cross-file "$cross_file" \
+    -Dbuildtype=release \
+    -Dplatforms=android \
+    -Dplatform-sdk-version=$sdkver \
+    -Dandroid-stub=true \
+    -Dgallium-drivers= \
+    -Dvulkan-drivers=freedreno \
+    -Dfreedreno-kmds=kgsl \
+    -Degl=disabled \
+    -Dglx=disabled \
+    -Dgles1=disabled \
+    -Dgles2=disabled \
+    -Dopengl=false \
+    -Dshared-glapi=disabled \
+    -Db_lto=true \
+    -Ddefault_library=shared
 
     ninja -C "$build"
 
