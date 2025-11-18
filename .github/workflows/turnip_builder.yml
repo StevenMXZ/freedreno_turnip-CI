@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Install deps
       run: |
@@ -21,7 +21,7 @@ jobs:
         ./bisect_turnip_only.sh
 
     - name: Upload bisect builds
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: turnip-bisect-results
         path: turnip_workdir/*.zip
