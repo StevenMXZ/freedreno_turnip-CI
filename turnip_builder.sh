@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Build Script (Mesa Main + No Cached Coherent Patch)
+# Turnip Build Script (Mesa Main + Fix A619 Freeze)
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -56,25 +56,33 @@ prepare_ndk(){
 prepare_source(){
 	echo "🌿 Preparing Mesa source (Main Branch)..."
 	cd "$workdir"
-	if [ -d mesa ]; then
-		rm -rf mesa
-	fi
+	rm -rf mesa
 	# Clone raso do branch 'main'
 	git clone --depth=1 "$mesa_repo" mesa
 	cd mesa
 
-	# --- APLICANDO O PATCH PARA CORRIGIR CONGELAMENTOS (A619) ---
-	echo -e "${green}Applying patch: Force Disable Cached Coherent Memory...${nocolor}"
-	
-	# Força a flag de capacidade do dispositivo para FALSE em tu_device.cc
-	sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
-	
-	# Substitui a condicional ternária em outros arquivos por segurança
-	grep -r "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | cut -d: -f1 | sort | uniq | while read file; do
+	# --- APLICANDO CORREÇÃO PARA A619 (Revertendo lógica de cache) ---
+	echo -e "${green}Applying fixes for A619 freeze (cached memory)...${nocolor}"
+
+	# 1. Reverte a mudança específica da commit 83212054e07 em tu_query.cc
+	# Troca tu_bo_init_new_cached de volta para tu_bo_init_new
+	if [ -f src/freedreno/vulkan/tu_query.cc ]; then
+		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
+		echo "Reverted tu_bo_init_new_cached in tu_query.cc"
+	fi
+
+	# 2. Abordagem Nuclear: Encontra onde a flag de cache é adicionada e a remove.
+	# Procura pela lógica ternária que habilita o bit CACHED e substitui por 0.
+	# Isso garante que nenhuma outra parte do código consiga habilitar o cache de CPU.
+	grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
+		# Substitui a lógica "(condição ? CACHED_BIT : 0)" por "0"
 		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
+		# Substitui apenas a flag se ela estiver solta (caso a sintaxe seja diferente)
+		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
+		echo "Disabled Cached Bit in $file"
 	done
 
-	echo -e "${green}✅ Patch applied: Cached Coherent Memory DISABLED.${nocolor}"
+	echo -e "${green}✅ Fixes applied: Query Pools reverted & Cached Memory disabled globally.${nocolor}"
 	# ------------------------------------------------------------
 
 	commit_hash=$(git rev-parse HEAD)
@@ -121,12 +129,10 @@ EOF
 
 	cd "$source_dir"
 
-	# Configurações de ambiente
 	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-	# REMOVIDO: -Dhave_librt=false e -Dshared-glapi=enabled
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -137,8 +143,10 @@ EOF
 		-Dfreedreno-kmds=kgsl \
 		-Degl=disabled \
 		-Dglx=disabled \
+		-Dshared-glapi=enabled \
 		-Db_lto=true \
 		-Dvulkan-beta=true \
+		-Dhave_librt=false \
 		-Ddefault_library=shared \
 		2>&1 | tee "$workdir/meson_log"
 
@@ -155,8 +163,7 @@ package_driver(){
 	local build_dir="$source_dir/build"
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
-	local output_suffix="no_cached_mem"
-
+	
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
 		exit 1
@@ -172,19 +179,19 @@ package_driver(){
 
 	local date_meta=$(date +'%b %d, %Y')
 	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-Main-${short_hash}-NoCachedMem"
+	local meta_name="Turnip-Main-${short_hash}-FixA619"
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Built from Mesa main. Patched to DISABLE Cached Coherent Memory (fixes A619 freeze). Commit $commit_hash",
+  "description": "Built from Mesa main. Includes reverts for A619 freeze (No Cached Memory). Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-	local zip_name="turnip_$(date +'%Y%m%d')_${short_hash}_${output_suffix}.zip"
+	local zip_name="turnip_$(date +'%Y%m%d')_${short_hash}_fix_a619.zip"
 	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
 	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
 }
@@ -195,15 +202,18 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Mesa-Main-NoCachedMem-${date_tag}-${short_hash}" > tag
+    echo "Mesa-Main-FixA619-${date_tag}-${short_hash}" > tag
     
-    echo "Turnip CI Build - ${date_tag} (Main + No Cached Memory Patch)" > release
+    echo "Turnip CI Build - ${date_tag} (Main + Fix A619 Freeze)" > release
 
     echo "Automated Turnip CI build from the latest Mesa main branch." > description
     echo "" >> description
     echo "### Build Details:" >> description
     echo "**Base:** Mesa main branch" >> description
-    echo "**Patch Applied:** Disabled \`has_cached_coherent_memory\`. This prevents the driver from using CPU caching for shared buffers, fixing system freezes on some A6xx devices (like A619)." >> description
+    echo "**Patches Applied:**" >> description
+    echo "1. Reverted \`tu_bo_init_new_cached\` usage in \`tu_query.cc\` (fixes regressions from commit \`83212054e07\`)." >> description
+    echo "2. Globally disabled \`VK_MEMORY_PROPERTY_HOST_CACHED_BIT\`." >> description
+    echo "**Purpose:** Fix system freezes on Adreno 619/6xx devices caused by broken IO coherency." >> description
     echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
