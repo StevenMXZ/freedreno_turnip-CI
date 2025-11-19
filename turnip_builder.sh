@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Build Script V2 (Mesa Main + Native KGSL Timeline Hack)
+# Turnip Build Script V3 (Native Hack + CI Fixes)
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -114,7 +114,7 @@ EOF
 apply_patches(){
     echo -e "${green}🔧 Applying Advanced Patches...${nocolor}"
     
-    # 1. Cache Revert (Fix A619) - Via SED (Mais simples para revert pontual)
+    # 1. Cache Revert (Fix A619)
 	if [ -f src/freedreno/vulkan/tu_query.cc ]; then
 		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
 	fi
@@ -125,19 +125,13 @@ apply_patches(){
 	fi
 
     # 2. Apply NATIVE TIMELINE PATCH
-    # Primeiro, geramos o arquivo patch
     create_native_patch
-    
-    # Tentamos aplicar. Usamos --reject para não parar o script se falhar, mas avisamos.
-    # Nota: Como o git apply é estrito, se o código mudou muito, pode falhar.
-    # Nesse caso, fallback para o método SED simples (apenas forçar a flag).
     
     echo "  ⚡ Attempting to apply Native Timeline C-Code Patch..."
     if git apply --ignore-space-change --ignore-whitespace "$workdir/native_timeline.patch"; then
         echo -e "${green}  ✅ NATIVE PATCH APPLIED! (True HW Sync attempt)${nocolor}"
     else
         echo -e "${red}  ⚠️ Native Patch failed (Codebase changed). Falling back to Force Flag only.${nocolor}"
-        # Fallback: Apenas força a flag (Emulado, mas funciona DXVK)
         if [ -f src/freedreno/vulkan/tu_device.c ]; then
              sed -i 's/features->timelineSemaphore = .*;/features->timelineSemaphore = true; \/\/ Force enabled/g' src/freedreno/vulkan/tu_device.c
              echo "  ℹ️ Fallback applied: Force Enable (Emulated)"
@@ -181,7 +175,6 @@ compile_mesa(){
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 	local cross_file="$source_dir/android-aarch64-crossfile.txt"
 
-	# Configuração do Cross-file
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
@@ -216,13 +209,13 @@ EOF
 		-Db_lto=true \
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
-		2>&1 | tee "$workdir/meson_log"
+		2>&1 | tee "$workdir/meson_log.txt"
 
 	if [ ! -f "$build_dir/build.ninja" ]; then
-		echo -e "${red}meson setup failed — see $workdir/meson_log for details${nocolor}"
+		echo -e "${red}meson setup failed — see $workdir/meson_log.txt for details${nocolor}"
 		exit 1
 	fi
-	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
+	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log.txt"
 }
 
 package_driver(){
@@ -263,6 +256,25 @@ EOF
 	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
 }
 
+# Função restaurada para criar os arquivos que o GitHub Actions exige
+generate_release_info() {
+    echo -e "${green}Generating release info for GitHub...${nocolor}"
+    cd "$workdir"
+    local date_tag=$(date +'%Y%m%d')
+	local short_hash=${commit_hash:0:7}
+
+    # Cria os arquivos que o workflow do GitHub Actions espera
+    echo "Mesa-Native-Hack-${date_tag}" > tag
+    echo "Turnip Native Hack ${date_tag}" > release
+
+    echo "Automated Turnip CI build from Mesa main." > description
+    echo "" >> description
+    echo "⚠️ **EXPERIMENTAL BUILD**" >> description
+    echo "- **Native Timeline Hack:** Attempts to map VK timelines to KGSL timestamps (DXVK 2.5+)." >> description
+    echo "- **No Cache:** Fixed A619 stability." >> description
+    echo "- **Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
+}
+
 # ===========================
 # Execução
 # ===========================
@@ -272,4 +284,6 @@ prepare_ndk
 prepare_source
 compile_mesa
 package_driver
+generate_release_info # <--- Agora a função é chamada!
+
 echo -e "${green}🎉 Build completed successfully!${nocolor}"
