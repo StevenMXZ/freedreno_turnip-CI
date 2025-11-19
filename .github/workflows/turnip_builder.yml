@@ -1,4 +1,4 @@
-name: Build "turnip" (Mesa Main + MRs)
+name: Build Turnip (Dual Variant)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,8 @@ on:
   - cron: "20 5 1,15 * *"
 
 jobs:
-  start_building_turnip:
+  build_and_release:
+    name: Build and Release
     runs-on: ubuntu-24.04
     steps:
     - name: Checkout repository
@@ -19,18 +20,16 @@ jobs:
         sudo apt build-dep mesa -y
         sudo apt install -y ccache python3-pip
         pip install --upgrade meson ninja
-    
+
     - name: Execute build script
       run: bash ./turnip_builder.sh
 
-    - name: Upload Logs as Artifact
+    - name: Upload Logs
       uses: actions/upload-artifact@v4
       with:
         name: build-logs
-        path: |
-          turnip_workdir/meson_log
-          turnip_workdir/ninja_log
-        if-no-files-found: ignore 
+        path: turnip_workdir/log_*.txt
+        if-no-files-found: ignore
 
     - id: get_info
       name: "Get release info"
@@ -39,7 +38,7 @@ jobs:
         echo "TAG_NAME=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
         echo "BODY_PATH=turnip_workdir/description" >> "$GITHUB_OUTPUT"
 
-    - name: Release "turnip"
+    - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
         body_path: ${{ steps.get_info.outputs.BODY_PATH }}
