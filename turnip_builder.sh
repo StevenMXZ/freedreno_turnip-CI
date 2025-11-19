@@ -4,18 +4,20 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Dual Builder
-# Variant 1: Main (Nuclear Fix for A619)
-# Variant 2: PixelyIon (Query Pool Fix only)
+# Turnip Build Script (Mesa Main + Revert Cache Commits)
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
+mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
+
+commit_hash=""
+version_str=""
 
 # ===========================
-# Funções Auxiliares
+# Funções
 # ===========================
 
 check_deps(){
@@ -50,176 +52,175 @@ prepare_ndk(){
 	fi
 }
 
-# Função principal de build
-build_variant() {
-    local variant_name=$1      # Nome para exibição/arquivo (Ex: Main, PixelyIon)
-    local repo_url=$2          # URL do Git
-    local branch=$3            # Branch para checkout
-    local patch_strategy=$4    # 'nuclear' (Main) ou 'query_only' (PixelyIon)
-    
-    local source_dir="$workdir/source_$variant_name"
-    local build_dir="$workdir/build_$variant_name"
-    local package_dir="$workdir/package_$variant_name"
+prepare_source(){
+	echo "🌿 Preparing Mesa source (Main Branch)..."
+	cd "$workdir"
+	if [ -d mesa ]; then
+		rm -rf mesa
+	fi
+	# Clone raso do branch 'main'
+	git clone --depth=1 "$mesa_repo" mesa
+	cd mesa
 
-    echo -e "\n${green}==============================================${nocolor}"
-    echo -e "${green}🚀 Starting Build: $variant_name ($branch) ${nocolor}"
-    echo -e "${green}==============================================${nocolor}"
+	# --- APLICANDO OS REVERTS (Neutralizando as commits) ---
+	echo -e "${green}Neutralizing Cached Memory logic for A619...${nocolor}"
 
-    # 1. Preparar Fonte
-    if [ -d "$source_dir" ]; then rm -rf "$source_dir"; fi
-    git clone --depth=1 "$repo_url" "$source_dir"
-    cd "$source_dir"
-    
-    # Se o branch não for o padrão do clone, faz fetch e checkout
-    if [ "$branch" != "main" ] && [ "$branch" != "master" ]; then
-        echo "Fetching branch $branch..."
-        git fetch origin "$branch"
-        git checkout "$branch"
-    fi
+    # 1. Reverter o uso no tu_query.cc (Desfaz o efeito da commit de uso)
+    # Troca a chamada da função "cached" pela versão normal antiga
+	if [ -f src/freedreno/vulkan/tu_query.cc ]; then
+		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
+        echo "✅ Reverted usage in tu_query.cc"
+	fi
 
-    # --- APLICAÇÃO DE PATCHES ---
-    echo -e "${green}--- Applying Patches ($patch_strategy) ---${nocolor}"
+    # 2. Neutralizar a definição no tu_device.h (Desfaz o efeito da commit de definição)
+    # Substitui a flag de cache por 0. Isso garante que mesmo se a função for chamada, 
+    # ela se comporte como a função antiga (sem cache).
+	if [ -f src/freedreno/vulkan/tu_device.h ]; then
+		# Remove a flag da lista de bits
+		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' src/freedreno/vulkan/tu_device.h
+        # Remove a lógica ternária se ela ainda existir
+        sed -i 's/dev->physical_device->has_cached_coherent_memory ? 0 : 0/0/g' src/freedreno/vulkan/tu_device.h
+        echo "✅ Neutered tu_bo_init_new_cached definition in tu_device.h"
+	fi
+	# ---------------------------------------------------
 
-    # Patch Comum: Reverter tu_bo_init_new_cached em tu_query.cc
-    # Isso corrige a regressão específica de query pools (commit 83212054e07)
-    if [ -f src/freedreno/vulkan/tu_query.cc ]; then
-        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
-        echo "✅ Reverted tu_bo_init_new_cached in tu_query.cc"
-    else
-        echo "${red}⚠️ Warning: tu_query.cc not found.${nocolor}"
-    fi
+	commit_hash=$(git rev-parse HEAD)
+	if [ -f VERSION ]; then
+	    version_str=$(cat VERSION | xargs)
+	else
+	    version_str="unknown"
+	fi
 
-    # Patch Adicional para 'nuclear' (apenas para Mesa Main): Desativar globalmente memória cacheada
-    if [ "$patch_strategy" == "nuclear" ]; then
-        echo "Applying Nuclear Fix (Global No Cached Mem)..."
-        if [ -f src/freedreno/vulkan/tu_device.cc ]; then
-            sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
-        fi
-        grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
-            sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
-            sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
-        done
-        echo "✅ Globally disabled cached coherent memory."
-    fi
-    # ----------------------------
+	cd "$workdir"
+}
 
-    # Info do Commit
-    local commit_hash=$(git rev-parse --short HEAD)
-    local version_str=$(cat VERSION 2>/dev/null | xargs || echo "unknown")
+compile_mesa(){
+	echo -e "${green}⚙️ Compiling Mesa...${nocolor}"
 
-    # 4. Compilar
-    echo -e "${green}--- Compiling $variant_name ---${nocolor}"
+	local source_dir="$workdir/mesa"
+	local build_dir="$source_dir/build"
+	
 	local ndk_root_path
-	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then ndk_root_path="$workdir/$ndkver"; else ndk_root_path="$ANDROID_NDK_LATEST_HOME"; fi
-	local ndk_bin="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
-	local sysroot="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
+		ndk_root_path="$workdir/$ndkver"
+	else
+		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
+	fi
 
-	local cross_file="$source_dir/android-cross.txt"
+	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
+	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+
+	local cross_file="$source_dir/android-aarch64-crossfile.txt"
 	cat <<EOF > "$cross_file"
 [binaries]
-ar = '$ndk_bin/llvm-ar'
-c = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang', '--sysroot=$sysroot']
-cpp = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang++', '--sysroot=$sysroot']
+ar = '$ndk_bin_path/llvm-ar'
+c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
+cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
 cpp_ld = 'lld'
-strip = '$ndk_bin/aarch64-linux-android-strip'
+strip = '$ndk_bin_path/aarch64-linux-android-strip'
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
 cpu = 'armv8'
 endian = 'little'
 EOF
-    
-    export LIBRT_LIBS=""
+
+	cd "$source_dir"
+
+	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-	if ! meson setup "$build_dir" --cross-file "$cross_file" \
-		-Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver \
-		-Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno \
-		-Dfreedreno-kmds=kgsl -Degl=disabled -Dglx=disabled -Dshared-glapi=enabled \
-		-Db_lto=true -Dvulkan-beta=true -Ddefault_library=shared \
-		2>&1 | tee "$workdir/log_meson_$variant_name.txt"; then
-        
-        echo -e "${red}Meson setup failed for $variant_name.${nocolor}"
-        return
-    fi
+	meson setup "$build_dir" --cross-file "$cross_file" \
+		-Dbuildtype=release \
+		-Dplatforms=android \
+		-Dplatform-sdk-version=$sdkver \
+		-Dandroid-stub=true \
+		-Dgallium-drivers= \
+		-Dvulkan-drivers=freedreno \
+		-Dfreedreno-kmds=kgsl \
+		-Degl=disabled \
+		-Dglx=disabled \
+		-Dshared-glapi=enabled \
+		-Db_lto=true \
+		-Dvulkan-beta=true \
+		-Ddefault_library=shared \
+		2>&1 | tee "$workdir/meson_log"
 
-    if ! ninja -C "$build_dir" 2>&1 | tee "$workdir/log_ninja_$variant_name.txt"; then
-        echo -e "${red}Compilation failed for $variant_name.${nocolor}"
-        return
-    fi
+	if [ ! -f "$build_dir/build.ninja" ]; then
+		echo -e "${red}meson setup failed — see $workdir/meson_log for details${nocolor}"
+		exit 1
+	fi
 
-    # 5. Empacotar
-    echo -e "${green}--- Packaging $variant_name ---${nocolor}"
-    local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
-    if [ ! -f "$lib_path" ]; then
-        echo -e "${red}Build failed for $variant_name (lib not found)${nocolor}"
-        return
-    fi
+	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
+}
 
-    if [ -d "$package_dir" ]; then rm -rf "$package_dir"; fi
-    mkdir -p "$package_dir"
-    cp "$lib_path" "$package_dir/libvulkan_freedreno.so"
+package_driver(){
+	local source_dir="$workdir/mesa"
+	local build_dir="$source_dir/build"
+	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
+	local package_temp="$workdir/package_temp"
+    local output_suffix="no_cache"
+
+	if [ ! -f "$lib_path" ]; then
+		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
+		exit 1
+	fi
+
+	rm -rf "$package_temp"
+	mkdir -p "$package_temp"
+	cp "$lib_path" "$package_temp/lib_temp.so"
+
+	cd "$package_temp"
+	patchelf --set-soname "vulkan.adreno.so" lib_temp.so
+	mv lib_temp.so "vulkan.ad07XX.so"
+
+	local date_meta=$(date +'%b %d, %Y')
+	local short_hash=${commit_hash:0:7}
+    local meta_name="Turnip-Main-${short_hash}-NoCache"
     
-    cd "$package_dir"
-    patchelf --set-soname "vulkan.adreno.so" libvulkan_freedreno.so
-    mv libvulkan_freedreno.so "vulkan.ad07XX.so"
-
-    local date_meta=$(date +'%Y-%m-%d')
-    # Nome curto e limpo
-    local meta_name="Turnip-${variant_name}-${commit_hash}"
-    
-    # Descrição dinâmica baseada no patch
-    local meta_desc=""
-    if [ "$patch_strategy" == "nuclear" ]; then
-        meta_desc="Mesa $version_str ($variant_name) + Nuclear A619 Fix (No Cache)."
-    else
-        meta_desc="Mesa $version_str ($variant_name) + Query Pool Fix."
-    fi
-
-    cat <<EOF > meta.json
+	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "$meta_desc",
+  "description": "Mesa Main with cached memory commits neutralized (Fixes A619). Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
-    
-    local zip_name="turnip_${variant_name}_${commit_hash}.zip"
-    zip -9 "$workdir/$zip_name" ./*
-    echo -e "${green}✅ Created: $workdir/$zip_name${nocolor}"
+
+	local zip_name="turnip_main_$(date +'%Y%m%d')_${short_hash}_${output_suffix}.zip"
+	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
+	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
 }
 
 generate_release_info() {
     echo -e "${green}Generating release info...${nocolor}"
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
-    
-    echo "Turnip-Dual-v2-${date_tag}" > tag
-    echo "Turnip Dual Build (A619 Focused) - ${date_tag}" > release
-    
-    echo "Automated Build containing 2 variants for A619 stability:" > description
+	local short_hash=${commit_hash:0:7}
+
+    echo "Mesa-Main-NoCache-${date_tag}-${short_hash}" > tag
+    echo "Turnip CI Build - ${date_tag} (No Cached Memory)" > release
+
+    echo "Automated Turnip CI build from Mesa main." > description
     echo "" >> description
-    echo "1. **Mesa Main:** Upstream Mesa + Nuclear Fix (Revert Query + Global No Cache). Best for avoiding freezes." >> description
-    echo "2. **PixelyIon:** Fork \`tu-newat\` + Query Fix only (Revert Query commit). Testing performance." >> description
+    echo "**Patch Applied:** Neutralized \`tu_bo_init_new_cached\` logic." >> description
+    echo "**Purpose:** Restore stability on Adreno 619 by disabling CPU caching for shared buffers (same behavior as older drivers)." >> description
+    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
 }
 
 # ===========================
 # Execução
 # ===========================
+clear
 check_deps
 prepare_ndk
-
-# VARIANT 1: Mesa Main (Nuclear Fix: Query Revert + Global Disable)
-build_variant "Main" "https://gitlab.freedesktop.org/mesa/mesa.git" "main" "nuclear"
-
-# VARIANT 2: PixelyIon (Query Revert Only)
-build_variant "PixelyIon" "https://gitlab.freedesktop.org/PixelyIon/mesa.git" "tu-newat" "query_only"
-
+prepare_source
+compile_mesa
+package_driver
 generate_release_info
 
-echo -e "${green}🎉 All builds finished!${nocolor}"
+echo -e "${green}🎉 Build completed successfully!${nocolor}"
