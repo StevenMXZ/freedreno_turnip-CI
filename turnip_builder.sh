@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Dual Builder (PixelyIon & Main) + MR 35894 + VK1.4
+# Turnip Dual Builder (PixelyIon & Main) + MR 35894 + VK1.4 + A619 Nuclear Fix
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -60,7 +60,6 @@ build_variant() {
     local source_dir="$workdir/source_$variant_name"
     local build_dir="$workdir/build_$variant_name"
     local package_dir="$workdir/package_$variant_name"
-    local package_temp="$workdir/package_temp_$variant_name"
 
     echo -e "\n${green}==============================================${nocolor}"
     echo -e "${green}🚀 Starting Build: $variant_name ${nocolor}"
@@ -78,18 +77,16 @@ build_variant() {
     git config user.email "ci@builder.com"
 
     # 2. Mesclar Merge Requests (Direto do Upstream)
-    # Adiciona o repo oficial como 'upstream' para garantir que encontramos os MRs
     git remote add upstream https://gitlab.freedesktop.org/mesa/mesa.git || true
     git fetch upstream
 
     for mr in "${mrs_to_merge[@]}"; do
         echo -e "${green}--- Merging MR !${mr} ---${nocolor}"
-        # Busca a referência do MR do upstream
         if git fetch upstream "refs/merge-requests/${mr}/head"; then
             if git merge --no-edit FETCH_HEAD; then
                 echo -e "${green}✅ MR !${mr} merged successfully.${nocolor}"
             else
-                echo -e "${red}❌ Merge failed for MR !${mr}. Skipping this MR but continuing build...${nocolor}"
+                echo -e "${red}❌ Merge failed for MR !${mr}. Skipping this MR...${nocolor}"
                 git merge --abort || true
             fi
         else
@@ -97,15 +94,13 @@ build_variant() {
         fi
     done
 
-    # 3. Aplicar Patch VK 1.4 (A6xx Hack) via SED
+    # 3. Aplicar Patch VK 1.4 (A6xx Hack)
     echo -e "${green}--- Applying A6xx VK 1.4 Hack ---${nocolor}"
 	if [ -f src/freedreno/vulkan/meson.build ]; then
 		sed -i 's/--api-version.*1\.1.*/--api-version 1.4/' src/freedreno/vulkan/meson.build || true
 	fi
 	if [ -f src/freedreno/vulkan/tu_device.cc ]; then
 		sed -i 's/#define TU_API_VERSION VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/#define TU_API_VERSION VK_MAKE_VERSION(1, 4, VK_HEADER_VERSION)/' src/freedreno/vulkan/tu_device.cc || true
-        
-        # Injeção do bloco de conformidade
 		sed -n '1,4000p' src/freedreno/vulkan/tu_device.cc > /tmp/tu_snippet.$$
 		if grep -q "tu_GetPhysicalDeviceProperties2" /tmp/tu_snippet.$$; then
 			sed -i '/tu_GetPhysicalDeviceProperties2/,/return;/ {
@@ -114,16 +109,35 @@ build_variant() {
 }' src/freedreno/vulkan/tu_device.cc || true
 		fi
 		rm -f /tmp/tu_snippet.$$
-        
 		sed -i 's/VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/TU_API_VERSION/g' src/freedreno/vulkan/tu_device.cc || true
 	fi
     echo -e "${green}✅ VK 1.4 patch applied.${nocolor}"
+
+    # 4. Aplicar Patch A619 Nuclear Fix (Desativar Memória Cacheada COMPLETAMENTE)
+    echo -e "${green}--- Applying A619 NUCLEAR Freeze Fix ---${nocolor}"
+    
+    # PARTE 1: Reverter a função específica em tu_query.cc (Adicionado agora)
+    if [ -f src/freedreno/vulkan/tu_query.cc ]; then
+		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
+		echo "Reverted tu_bo_init_new_cached in tu_query.cc"
+	fi
+
+    # PARTE 2: Matar a flag de cache globalmente
+    if [ -f src/freedreno/vulkan/tu_device.cc ]; then
+        sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
+    fi
+    grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
+		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
+		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
+	done
+    echo -e "${green}✅ A619 Nuclear Fix applied.${nocolor}"
+
 
     # Info do Commit
     local commit_hash=$(git rev-parse --short HEAD)
     local version_str=$(cat VERSION 2>/dev/null | xargs || echo "unknown")
 
-    # 4. Compilar
+    # 5. Compilar
     echo -e "${green}--- Compiling ---${nocolor}"
 	local ndk_root_path
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then ndk_root_path="$workdir/$ndkver"; else ndk_root_path="$ANDROID_NDK_LATEST_HOME"; fi
@@ -146,20 +160,19 @@ cpu = 'armv8'
 endian = 'little'
 EOF
     
-    # Configs de ambiente
     export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # REMOVIDO: -Dhave_librt=false e -Dshared-glapi=enabled
+    # Flags limpas (sem android_strict ou have_librt)
 	if ! meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver \
 		-Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno \
-		-Dfreedreno-kmds=kgsl -Degl=disabled -Dglx=disabled \
+		-Dfreedreno-kmds=kgsl -Degl=disabled -Dglx=disabled -Dshared-glapi=enabled \
 		-Db_lto=true -Dvulkan-beta=true -Ddefault_library=shared \
 		2>&1 | tee "$workdir/log_meson_$variant_name.txt"; then
         
-        echo -e "${red}Meson setup failed for $variant_name. Check log_meson_$variant_name.txt${nocolor}"
+        echo -e "${red}Meson setup failed for $variant_name.${nocolor}"
         return
     fi
 
@@ -169,7 +182,7 @@ EOF
     fi
     echo -e "${green}Compilation successful.${nocolor}"
 
-    # 5. Empacotar
+    # 6. Empacotar
     echo -e "${green}--- Packaging ---${nocolor}"
     local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
     if [ ! -f "$lib_path" ]; then
@@ -177,10 +190,8 @@ EOF
         return
     fi
 
-    # Garante diretório limpo para este pacote
     if [ -d "$package_dir" ]; then rm -rf "$package_dir"; fi
     mkdir -p "$package_dir"
-    
     cp "$lib_path" "$package_dir/libvulkan_freedreno.so"
     
     cd "$package_dir"
@@ -192,7 +203,7 @@ EOF
 {
   "schemaVersion": 1,
   "name": "Turnip ($variant_name) - $date_meta",
-  "description": "Mesa $version_str + MR !${mrs_to_merge[*]} + VK1.4 Patch. Commit $commit_hash",
+  "description": "Mesa $version_str + MR !${mrs_to_merge[*]} + VK1.4 + A619 Nuclear Fix. Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
@@ -214,8 +225,10 @@ generate_release_info() {
     
     echo "Automated Build containing 2 variants:" > description
     echo "" >> description
-    echo "1. **Mesa Main:** Upstream Mesa + MR !${mrs_to_merge[*]} + VK1.4 Patch" >> description
-    echo "2. **PixelyIon:** PixelyIon Fork + MR !${mrs_to_merge[*]} + VK1.4 Patch" >> description
+    echo "**Features:** VK1.4 Fake (A6xx), A619 Freeze Fix (Nuclear), MRs: \`!${mrs_to_merge[*]}\`" >> description
+    echo "" >> description
+    echo "1. **Mesa Main**" >> description
+    echo "2. **PixelyIon**" >> description
 }
 
 # ===========================
