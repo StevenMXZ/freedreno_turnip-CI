@@ -5,8 +5,8 @@ nocolor='\033[0m'
 
 # ===========================
 # Turnip Dual Builder
-# Variant 1: Main (Nuclear Fix for A6xx freezes)
-# Variant 2: PixelyIon (Specific Query Pool Fix)
+# Variant 1: Main (Nuclear Fix for A619)
+# Variant 2: PixelyIon (Query Pool Fix only)
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -55,7 +55,7 @@ build_variant() {
     local variant_name=$1      # Nome para exibição/arquivo (Ex: Main, PixelyIon)
     local repo_url=$2          # URL do Git
     local branch=$3            # Branch para checkout
-    local patch_strategy=$4    # 'nuclear' ou 'query_only'
+    local patch_strategy=$4    # 'nuclear' (Main) ou 'query_only' (PixelyIon)
     
     local source_dir="$workdir/source_$variant_name"
     local build_dir="$workdir/build_$variant_name"
@@ -81,7 +81,7 @@ build_variant() {
     echo -e "${green}--- Applying Patches ($patch_strategy) ---${nocolor}"
 
     # Patch Comum: Reverter tu_bo_init_new_cached em tu_query.cc
-    # Isso corrige a regressão específica de query pools
+    # Isso corrige a regressão específica de query pools (commit 83212054e07)
     if [ -f src/freedreno/vulkan/tu_query.cc ]; then
         sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
         echo "✅ Reverted tu_bo_init_new_cached in tu_query.cc"
@@ -89,7 +89,7 @@ build_variant() {
         echo "${red}⚠️ Warning: tu_query.cc not found.${nocolor}"
     fi
 
-    # Patch Adicional para 'nuclear' (Mesa Main): Desativar globalmente memória cacheada
+    # Patch Adicional para 'nuclear' (apenas para Mesa Main): Desativar globalmente memória cacheada
     if [ "$patch_strategy" == "nuclear" ]; then
         echo "Applying Nuclear Fix (Global No Cached Mem)..."
         if [ -f src/freedreno/vulkan/tu_device.cc ]; then
@@ -199,19 +199,13 @@ generate_release_info() {
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
     
-    echo "Turnip-Dual-${date_tag}" > tag
-    echo "Turnip Dual Build - ${date_tag}" > release
+    echo "Turnip-Dual-v2-${date_tag}" > tag
+    echo "Turnip Dual Build (A619 Focused) - ${date_tag}" > release
     
-    echo "Automated Build containing 2 variants:" > description
+    echo "Automated Build containing 2 variants for A619 stability:" > description
     echo "" >> description
-    echo "1. **Mesa Main:** (Nuclear Fix)" >> description
-    echo "   - Reverted \`tu_bo_init_new_cached\` usage in \`tu_query.cc\`." >> description
-    echo "   - Globally disabled \`VK_MEMORY_PROPERTY_HOST_CACHED_BIT\`." >> description
-    echo "   - *Best for Adreno 6xx stability.*" >> description
-    echo "" >> description
-    echo "2. **PixelyIon:** (Branch \`tu-newat\`)" >> description
-    echo "   - Reverted \`tu_bo_init_new_cached\` usage in \`tu_query.cc\`." >> description
-    echo "   - *Contains specific autotuner changes from PixelyIon.*" >> description
+    echo "1. **Mesa Main:** Upstream Mesa + Nuclear Fix (Revert Query + Global No Cache). Best for avoiding freezes." >> description
+    echo "2. **PixelyIon:** Fork \`tu-newat\` + Query Fix only (Revert Query commit). Testing performance." >> description
 }
 
 # ===========================
@@ -221,11 +215,9 @@ check_deps
 prepare_ndk
 
 # VARIANT 1: Mesa Main (Nuclear Fix: Query Revert + Global Disable)
-# Isso replica o build 1985370 que você confirmou ser o melhor
 build_variant "Main" "https://gitlab.freedesktop.org/mesa/mesa.git" "main" "nuclear"
 
 # VARIANT 2: PixelyIon (Query Revert Only)
-# Apenas reverte a commit problemática do query pool
 build_variant "PixelyIon" "https://gitlab.freedesktop.org/PixelyIon/mesa.git" "tu-newat" "query_only"
 
 generate_release_info
