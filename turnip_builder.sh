@@ -4,7 +4,9 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Dual Builder (Main & Danil + A619 Fix)
+# Turnip Dual Builder
+# Variant 1: Main (Nuclear Fix for A6xx freezes)
+# Variant 2: PixelyIon (Specific Query Pool Fix)
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -48,48 +50,58 @@ prepare_ndk(){
 	fi
 }
 
-# Função genérica para construir uma variante
+# Função principal de build
 build_variant() {
-    local variant_name=$1  # Ex: Main, Danil
-    local repo_url=$2
-    local branch=$3
+    local variant_name=$1      # Nome para exibição/arquivo (Ex: Main, PixelyIon)
+    local repo_url=$2          # URL do Git
+    local branch=$3            # Branch para checkout
+    local patch_strategy=$4    # 'nuclear' ou 'query_only'
     
     local source_dir="$workdir/source_$variant_name"
     local build_dir="$workdir/build_$variant_name"
     local package_dir="$workdir/package_$variant_name"
 
     echo -e "\n${green}==============================================${nocolor}"
-    echo -e "${green}🚀 Starting Build: $variant_name ${nocolor}"
+    echo -e "${green}🚀 Starting Build: $variant_name ($branch) ${nocolor}"
     echo -e "${green}==============================================${nocolor}"
 
     # 1. Preparar Fonte
     if [ -d "$source_dir" ]; then rm -rf "$source_dir"; fi
-    # Clone completo
-    git clone "$repo_url" "$source_dir"
+    git clone --depth=1 "$repo_url" "$source_dir"
     cd "$source_dir"
-    echo -e "${green}Checking out $branch...${nocolor}"
-    git checkout "$branch" || git checkout main
-
-    # --- APLICAR FIX DA A619 (Nuclear: Desativar Cache Coerente) ---
-    echo -e "${green}--- Applying A619 Freeze Fix (No Cached Mem) ---${nocolor}"
     
-    # Reverter a função específica em tu_query.cc (se existir)
-    if [ -f src/freedreno/vulkan/tu_query.cc ]; then
-		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
-	fi
-
-    # Forçar has_cached_coherent_memory = false
-    if [ -f src/freedreno/vulkan/tu_device.cc ]; then
-        sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
+    # Se o branch não for o padrão do clone, faz fetch e checkout
+    if [ "$branch" != "main" ] && [ "$branch" != "master" ]; then
+        echo "Fetching branch $branch..."
+        git fetch origin "$branch"
+        git checkout "$branch"
     fi
-    
-    # Substituição global para garantir que a flag de cache nunca seja usada
-    grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
-		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
-		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
-	done
-    echo -e "${green}✅ A619 Fix applied.${nocolor}"
 
+    # --- APLICAÇÃO DE PATCHES ---
+    echo -e "${green}--- Applying Patches ($patch_strategy) ---${nocolor}"
+
+    # Patch Comum: Reverter tu_bo_init_new_cached em tu_query.cc
+    # Isso corrige a regressão específica de query pools
+    if [ -f src/freedreno/vulkan/tu_query.cc ]; then
+        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
+        echo "✅ Reverted tu_bo_init_new_cached in tu_query.cc"
+    else
+        echo "${red}⚠️ Warning: tu_query.cc not found.${nocolor}"
+    fi
+
+    # Patch Adicional para 'nuclear' (Mesa Main): Desativar globalmente memória cacheada
+    if [ "$patch_strategy" == "nuclear" ]; then
+        echo "Applying Nuclear Fix (Global No Cached Mem)..."
+        if [ -f src/freedreno/vulkan/tu_device.cc ]; then
+            sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
+        fi
+        grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
+            sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
+            sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
+        done
+        echo "✅ Globally disabled cached coherent memory."
+    fi
+    # ----------------------------
 
     # Info do Commit
     local commit_hash=$(git rev-parse --short HEAD)
@@ -122,12 +134,16 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-	meson setup "$build_dir" --cross-file "$cross_file" \
+	if ! meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver \
 		-Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno \
 		-Dfreedreno-kmds=kgsl -Degl=disabled -Dglx=disabled -Dshared-glapi=enabled \
 		-Db_lto=true -Dvulkan-beta=true -Ddefault_library=shared \
-		2>&1 | tee "$workdir/log_meson_$variant_name.txt"
+		2>&1 | tee "$workdir/log_meson_$variant_name.txt"; then
+        
+        echo -e "${red}Meson setup failed for $variant_name.${nocolor}"
+        return
+    fi
 
     if ! ninja -C "$build_dir" 2>&1 | tee "$workdir/log_ninja_$variant_name.txt"; then
         echo -e "${red}Compilation failed for $variant_name.${nocolor}"
@@ -150,15 +166,23 @@ EOF
     patchelf --set-soname "vulkan.adreno.so" libvulkan_freedreno.so
     mv libvulkan_freedreno.so "vulkan.ad07XX.so"
 
-    local date_meta=$(date +'%b %d, %Y')
-    # Nome curto para evitar erro de dlopen
+    local date_meta=$(date +'%Y-%m-%d')
+    # Nome curto e limpo
     local meta_name="Turnip-${variant_name}-${commit_hash}"
     
+    # Descrição dinâmica baseada no patch
+    local meta_desc=""
+    if [ "$patch_strategy" == "nuclear" ]; then
+        meta_desc="Mesa $version_str ($variant_name) + Nuclear A619 Fix (No Cache)."
+    else
+        meta_desc="Mesa $version_str ($variant_name) + Query Pool Fix."
+    fi
+
     cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Mesa $version_str ($variant_name) + A619 Fix. Commit $commit_hash",
+  "description": "$meta_desc",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
@@ -175,15 +199,19 @@ generate_release_info() {
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
     
-    echo "Turnip-Dual-Danil-${date_tag}" > tag
-    echo "Turnip Dual Build (Main & Danil + A619 Fix) - ${date_tag}" > release
+    echo "Turnip-Dual-${date_tag}" > tag
+    echo "Turnip Dual Build - ${date_tag}" > release
     
     echo "Automated Build containing 2 variants:" > description
     echo "" >> description
-    echo "**Common Features:** A619 Freeze Fix (No Cached Mem) applied to ALL builds." >> description
+    echo "1. **Mesa Main:** (Nuclear Fix)" >> description
+    echo "   - Reverted \`tu_bo_init_new_cached\` usage in \`tu_query.cc\`." >> description
+    echo "   - Globally disabled \`VK_MEMORY_PROPERTY_HOST_CACHED_BIT\`." >> description
+    echo "   - *Best for Adreno 6xx stability.*" >> description
     echo "" >> description
-    echo "1. **Mesa Main:** Official Upstream Mesa" >> description
-    echo "2. **Danil:** Fork \`tu-newat-fixes\` (Updated link)" >> description
+    echo "2. **PixelyIon:** (Branch \`tu-newat\`)" >> description
+    echo "   - Reverted \`tu_bo_init_new_cached\` usage in \`tu_query.cc\`." >> description
+    echo "   - *Contains specific autotuner changes from PixelyIon.*" >> description
 }
 
 # ===========================
@@ -192,11 +220,13 @@ generate_release_info() {
 check_deps
 prepare_ndk
 
-# VARIANT 1: Mesa Main (Estável)
-build_variant "Main" "https://gitlab.freedesktop.org/mesa/mesa.git" "main"
+# VARIANT 1: Mesa Main (Nuclear Fix: Query Revert + Global Disable)
+# Isso replica o build 1985370 que você confirmou ser o melhor
+build_variant "Main" "https://gitlab.freedesktop.org/mesa/mesa.git" "main" "nuclear"
 
-# VARIANT 2: Danil's Fork (tu-newat-fixes)
-build_variant "Danil" "https://gitlab.freedesktop.org/Danil/mesa.git" "tu-newat-fixes"
+# VARIANT 2: PixelyIon (Query Revert Only)
+# Apenas reverte a commit problemática do query pool
+build_variant "PixelyIon" "https://gitlab.freedesktop.org/PixelyIon/mesa.git" "tu-newat" "query_only"
 
 generate_release_info
 
