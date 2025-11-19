@@ -12,7 +12,7 @@ workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
 
-# CORREÇÃO: Removido o MR 38451 que estava causando conflito
+# Lista de MRs para mesclar
 mrs_to_merge=("35894")
 
 # ===========================
@@ -60,6 +60,7 @@ build_variant() {
     local source_dir="$workdir/source_$variant_name"
     local build_dir="$workdir/build_$variant_name"
     local package_dir="$workdir/package_$variant_name"
+    local package_temp="$workdir/package_temp_$variant_name"
 
     echo -e "\n${green}==============================================${nocolor}"
     echo -e "${green}🚀 Starting Build: $variant_name ${nocolor}"
@@ -90,7 +91,6 @@ build_variant() {
             else
                 echo -e "${red}❌ Merge failed for MR !${mr}. Skipping this MR but continuing build...${nocolor}"
                 git merge --abort || true
-                # Não abortamos mais o build inteiro, apenas pulamos o MR conflitante
             fi
         else
              echo -e "${red}❌ Could not fetch MR !${mr}.${nocolor}"
@@ -151,19 +151,23 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-	meson setup "$build_dir" --cross-file "$cross_file" \
+    # REMOVIDO: -Dhave_librt=false e -Dshared-glapi=enabled
+	if ! meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver \
 		-Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno \
-		-Dfreedreno-kmds=kgsl -Degl=disabled -Dglx=disabled -Dshared-glapi=enabled \
-		-Db_lto=true -Dvulkan-beta=true -Dhave_librt=false -Ddefault_library=shared \
-		2>&1 | tee "$workdir/log_meson_$variant_name.txt"
+		-Dfreedreno-kmds=kgsl -Degl=disabled -Dglx=disabled \
+		-Db_lto=true -Dvulkan-beta=true -Ddefault_library=shared \
+		2>&1 | tee "$workdir/log_meson_$variant_name.txt"; then
+        
+        echo -e "${red}Meson setup failed for $variant_name. Check log_meson_$variant_name.txt${nocolor}"
+        return
+    fi
 
-    if ninja -C "$build_dir" 2>&1 | tee "$workdir/log_ninja_$variant_name.txt"; then
-        echo -e "${green}Compilation successful.${nocolor}"
-    else
+    if ! ninja -C "$build_dir" 2>&1 | tee "$workdir/log_ninja_$variant_name.txt"; then
         echo -e "${red}Compilation failed for $variant_name.${nocolor}"
         return
     fi
+    echo -e "${green}Compilation successful.${nocolor}"
 
     # 5. Empacotar
     echo -e "${green}--- Packaging ---${nocolor}"
