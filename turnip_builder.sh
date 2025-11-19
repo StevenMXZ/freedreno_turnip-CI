@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Build Script (Mesa Main + A6xx VK1.4 Patch + MR 35894)
+# Turnip Dual Builder (PixelyIon & Main) + MRs + VK1.4
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -12,15 +12,11 @@ workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
 
-mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
-# MR a ser mesclado
-merge_request_num="35894"
-
-commit_hash=""
-version_str=""
+# Lista de MRs para mesclar
+mrs_to_merge=("38451" "35894")
 
 # ===========================
-# Funções
+# Funções Auxiliares
 # ===========================
 
 check_deps(){
@@ -51,183 +47,176 @@ prepare_ndk(){
 			unzip "${ndkver}-linux.zip" &> /dev/null
 		fi
 	else
-		echo "Using preinstalled Android NDK from GitHub Actions image."
+		echo "Using preinstalled Android NDK."
 	fi
 }
 
-prepare_source(){
-	echo "🌿 Preparing Mesa source (Main Branch)..."
-	cd "$workdir"
-	rm -rf mesa
-	git clone "$mesa_repo" mesa
-	cd mesa
+# Função genérica para construir uma variante
+build_variant() {
+    local variant_name=$1
+    local repo_url=$2
+    local branch=$3
+    
+    local source_dir="$workdir/source_$variant_name"
+    local build_dir="$workdir/build_$variant_name"
+    local package_dir="$workdir/package_$variant_name"
 
-	# --- 1. APLICAR O MERGE REQUEST ---
-	echo -e "${green}Configuring local git identity for merge...${nocolor}"
-	git config user.name "CI Builder"
-	git config user.email "ci@builder.com"
-	
-	echo -e "${green}Fetching Merge Request !${merge_request_num}...${nocolor}"
-	git fetch origin "refs/merge-requests/${merge_request_num}/head"
-	
-	echo -e "${green}Merging fetched MR !${merge_request_num} into main branch...${nocolor}"
-	if ! git merge --no-edit FETCH_HEAD; then
-		echo -e "${red}Merge failed for MR !${merge_request_num}. Conflicts might need manual resolution.${nocolor}"
-		exit 1
+    echo -e "\n${green}==============================================${nocolor}"
+    echo -e "${green}🚀 Starting Build: $variant_name ${nocolor}"
+    echo -e "${green}==============================================${nocolor}"
+
+    # 1. Preparar Fonte
+    if [ -d "$source_dir" ]; then rm -rf "$source_dir"; fi
+    git clone "$repo_url" "$source_dir"
+    cd "$source_dir"
+    git checkout "$branch" || git checkout main
+
+    # Configurar Git
+    git config user.name "CI Builder"
+    git config user.email "ci@builder.com"
+
+    # 2. Mesclar Merge Requests (Direto do Upstream)
+    # Adiciona o repo oficial como 'upstream' para garantir que encontramos os MRs
+    git remote add upstream https://gitlab.freedesktop.org/mesa/mesa.git || true
+    git fetch upstream
+
+    for mr in "${mrs_to_merge[@]}"; do
+        echo -e "${green}--- Merging MR !${mr} ---${nocolor}"
+        # Busca a referência do MR do upstream
+        if git fetch upstream "refs/merge-requests/${mr}/head"; then
+            if git merge --no-edit FETCH_HEAD; then
+                echo -e "${green}✅ MR !${mr} merged successfully.${nocolor}"
+            else
+                echo -e "${red}❌ Merge failed for MR !${mr}. Aborting this variant.${nocolor}"
+                return # Pula para a próxima variante se falhar
+            fi
+        else
+             echo -e "${red}❌ Could not fetch MR !${mr}.${nocolor}"
+             return
+        fi
+    done
+
+    # 3. Aplicar Patch VK 1.4 (A6xx Hack) via SED
+    echo -e "${green}--- Applying A6xx VK 1.4 Hack ---${nocolor}"
+	if [ -f src/freedreno/vulkan/meson.build ]; then
+		sed -i 's/--api-version.*1\.1.*/--api-version 1.4/' src/freedreno/vulkan/meson.build || true
 	fi
-	echo -e "${green}Merge !${merge_request_num} successful!${nocolor}\n"
-
-	# --- 2. APLICAR O PATCH VK 1.4 (com sed) ---
-	echo -e "${green}Applying A6xx VK 1.4 patch safely via sed...${nocolor}"
-	sed -i 's/--api-version..1\.1./--api-version 1.4/' src/freedreno/vulkan/meson.build || true
-	sed -i 's/#define TU_API_VERSION VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/#define TU_API_VERSION VK_MAKE_VERSION(1, 4, VK_HEADER_VERSION)/' src/freedreno/vulkan/tu_device.cc || true
-	sed -i '/tu_GetPhysicalDeviceProperties2/,/return;/ {
+	if [ -f src/freedreno/vulkan/tu_device.cc ]; then
+		sed -i 's/#define TU_API_VERSION VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/#define TU_API_VERSION VK_MAKE_VERSION(1, 4, VK_HEADER_VERSION)/' src/freedreno/vulkan/tu_device.cc || true
+        
+        # Injeção do bloco de conformidade
+		sed -n '1,4000p' src/freedreno/vulkan/tu_device.cc > /tmp/tu_snippet.$$
+		if grep -q "tu_GetPhysicalDeviceProperties2" /tmp/tu_snippet.$$; then
+			sed -i '/tu_GetPhysicalDeviceProperties2/,/return;/ {
   /return;/ i\
-   /* Force A6xx to report Vulkan 1.4 conformance */\
-   p->conformanceVersion = (VkConformanceVersion){\
-      .major = 1,\
-      .minor = 4,\
-      .subminor = 0,\
-      .patch = 0,\
-   };
+   p->conformanceVersion = (VkConformanceVersion){1, 4, 0, 0};
 }' src/freedreno/vulkan/tu_device.cc || true
-	sed -i 's/VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/TU_API_VERSION/' src/freedreno/vulkan/tu_device.cc || true
-	echo -e "${green}✅ VK1.4 modifications for A6xx applied successfully.${nocolor}"
-	# --- FIM DOS PATCHES ---
-
-	commit_hash=$(git rev-parse HEAD)
-	if [ -f VERSION ]; then
-	    version_str=$(cat VERSION | xargs)
-	else
-	    version_str="unknown"
+		fi
+		rm -f /tmp/tu_snippet.$$
+        
+		sed -i 's/VK_MAKE_VERSION(1, 3, VK_HEADER_VERSION)/TU_API_VERSION/g' src/freedreno/vulkan/tu_device.cc || true
 	fi
+    echo -e "${green}✅ VK 1.4 patch applied.${nocolor}"
 
-	cd "$workdir"
-}
+    # Info do Commit
+    local commit_hash=$(git rev-parse --short HEAD)
+    local version_str=$(cat VERSION 2>/dev/null | xargs || echo "unknown")
 
-compile_mesa(){
-	echo -e "${green}⚙️ Compiling Mesa (Main + VK1.4 Patch + MR !${merge_request_num})...${nocolor}"
-
-	local source_dir="$workdir/mesa"
-	local build_dir="$source_dir/build"
-	local description="Mesa Main (A6xx VK1.4 Patch + MR !${merge_request_num})"
-
+    # 4. Compilar
+    echo -e "${green}--- Compiling ---${nocolor}"
 	local ndk_root_path
-	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
-		ndk_root_path="$workdir/$ndkver"
-	else
-		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
-	fi
+	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then ndk_root_path="$workdir/$ndkver"; else ndk_root_path="$ANDROID_NDK_LATEST_HOME"; fi
+	local ndk_bin="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
+	local sysroot="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
-	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-
-	local cross_file="$source_dir/android-aarch64-crossfile.txt"
+	local cross_file="$source_dir/android-cross.txt"
 	cat <<EOF > "$cross_file"
 [binaries]
-ar = '$ndk_bin_path/llvm-ar'
-c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
-cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+ar = '$ndk_bin/llvm-ar'
+c = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang', '--sysroot=$sysroot']
+cpp = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang++', '--sysroot=$sysroot']
 c_ld = 'lld'
 cpp_ld = 'lld'
-strip = '$ndk_bin_path/aarch64-linux-android-strip'
+strip = '$ndk_bin/aarch64-linux-android-strip'
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
 cpu = 'armv8'
 endian = 'little'
 EOF
-
-	cd "$source_dir"
+    
+    # Configs de ambiente
+    export LIBRT_LIBS=""
+	export CFLAGS="-D__ANDROID__"
+	export CXXFLAGS="-D__ANDROID__"
 
 	meson setup "$build_dir" --cross-file "$cross_file" \
-		-Dbuildtype=release \
-		-Dplatforms=android \
-		-Dplatform-sdk-version=$sdkver \
-		-Dandroid-stub=true \
-		-Dgallium-drivers= \
-		-Dvulkan-drivers=freedreno \
-		-Dfreedreno-kmds=kgsl \
-		-Degl=disabled \
-		-Dglx=disabled \
-		-Dshared-glapi=enabled \
-		-Db_lto=true \
-		-Dvulkan-beta=true \
-		2>&1 | tee "$workdir/meson_log"
+		-Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver \
+		-Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno \
+		-Dfreedreno-kmds=kgsl -Degl=disabled -Dglx=disabled -Dshared-glapi=enabled \
+		-Db_lto=true -Dvulkan-beta=true -Dhave_librt=false -Ddefault_library=shared \
+		2>&1 | tee "$workdir/log_meson_$variant_name.txt"
 
-	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
-}
+    ninja -C "$build_dir" 2>&1 | tee "$workdir/log_ninja_$variant_name.txt"
 
-package_driver(){
-	local source_dir="$workdir/mesa"
-	local build_dir="$source_dir/build"
-	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
-	local package_temp="$workdir/package_temp"
-	local description_name="Mesa Main (A6xx VK1.4 Patch + MR !${merge_request_num})"
-	local output_suffix="vk14_a6xx_mr${merge_request_num}"
+    # 5. Empacotar
+    echo -e "${green}--- Packaging ---${nocolor}"
+    local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
+    if [ ! -f "$lib_path" ]; then
+        echo -e "${red}Build failed for $variant_name${nocolor}"
+        return
+    fi
 
-	if [ ! -f "$lib_path" ]; then
-		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
-		exit 1
-	fi
+    mkdir -p "$package_dir"
+    cp "$lib_path" "$package_temp/lib_temp.so" 2>/dev/null || cp "$lib_path" "$package_dir/libvulkan_freedreno.so"
+    
+    cd "$package_dir"
+    patchelf --set-soname "vulkan.adreno.so" libvulkan_freedreno.so
+    mv libvulkan_freedreno.so "vulkan.ad07XX.so"
 
-	mkdir -p "$package_temp"
-	cp "$lib_path" "$package_temp/lib_temp.so"
-
-	cd "$package_temp"
-	patchelf --set-soname "vulkan.adreno.so" lib_temp.so
-	mv lib_temp.so "vulkan.ad07XX.so"
-
-	local date_meta=$(date +'%b %d, %Y')
-	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-Main-${short_hash}-VK14-A6xx-MR${merge_request_num}"
-	cat <<EOF > meta.json
+    local date_meta=$(date +'%b %d, %Y')
+    cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "$meta_name",
-  "description": "Built from Mesa main + A6xx VK1.4 Patch + MR !${merge_request_num}. Commit $commit_hash",
+  "name": "Turnip ($variant_name) - $date_meta",
+  "description": "Mesa $version_str + MRs !${mrs_to_merge[*]} + VK1.4 Patch. Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
-
-	local zip_name="turnip_$(date +'%Y%m%d')_${short_hash}_${output_suffix}.zip"
-	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
-	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
+    
+    local zip_name="turnip_${variant_name}_$(date +'%Y%m%d')_${commit_hash}.zip"
+    zip -9 "$workdir/$zip_name" ./*
+    echo -e "${green}✅ Created: $workdir/$zip_name${nocolor}"
 }
 
 generate_release_info() {
-    echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
+    echo -e "${green}Generating release info...${nocolor}"
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
-	local short_hash=${commit_hash:0:7}
-
-    echo "Mesa-Main-VK14-A6xx-MR${merge_request_num}-${date_tag}-${short_hash}" > tag
     
-    echo "Turnip CI Build - ${date_tag} (Main + A6xx VK1.4 Patch + MR !${merge_request_num})" > release
-
-    echo "Automated Turnip CI build from the latest Mesa main branch." > description
+    echo "Turnip-MultiBuild-${date_tag}" > tag
+    echo "Turnip Dual Build - ${date_tag}" > release
+    
+    echo "Automated Build containing 2 variants:" > description
     echo "" >> description
-    echo "### Build Details:" >> description
-    echo "**Base:** Mesa main branch" >> description
-    echo "**Patch Applied:** Force Vulkan 1.4 support for A6xx devices." >> description
-	# CORREÇÃO: Descrição do MR atualizada
-    echo "**Merged MR:** \`!${merge_request_num}\` (Draft: turnip: Implement VK_QCOM_multiview_per_view_* and bin merging optimizations)" >> description
-    echo "**Commit (após merge/patch):** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
-    
-    echo -e "${green}Release info generated.${nocolor}"
+    echo "1. **Mesa Main:** Upstream Mesa + MRs !38451 & !35894 + VK1.4 Patch" >> description
+    echo "2. **PixelyIon:** PixelyIon Fork + MRs !38451 & !35894 + VK1.4 Patch" >> description
 }
 
 # ===========================
 # Execução
 # ===========================
-clear
 check_deps
 prepare_ndk
-prepare_source
-compile_mesa
-package_driver
+
+# VARIANT 1: Mesa Main
+build_variant "Main" "https://gitlab.freedesktop.org/mesa/mesa.git" "main"
+
+# VARIANT 2: PixelyIon
+build_variant "PixelyIon" "https://gitlab.freedesktop.org/PixelyIon/mesa.git" "tu-newat"
+
 generate_release_info
 
-echo -e "${green}🎉 Build completed successfully!${nocolor}"
+echo -e "${green}🎉 All builds finished!${nocolor}"
