@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Dual Builder (PixelyIon & Main) + MRs + VK1.4
+# Turnip Dual Builder (PixelyIon & Main) + MR 35894 + VK1.4
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -12,8 +12,8 @@ workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
 
-# Lista de MRs para mesclar
-mrs_to_merge=("38451" "35894")
+# CORREÇÃO: Removido o MR 38451 que estava causando conflito
+mrs_to_merge=("35894")
 
 # ===========================
 # Funções Auxiliares
@@ -67,6 +67,7 @@ build_variant() {
 
     # 1. Preparar Fonte
     if [ -d "$source_dir" ]; then rm -rf "$source_dir"; fi
+    # Clone completo para permitir merge
     git clone "$repo_url" "$source_dir"
     cd "$source_dir"
     git checkout "$branch" || git checkout main
@@ -87,12 +88,12 @@ build_variant() {
             if git merge --no-edit FETCH_HEAD; then
                 echo -e "${green}✅ MR !${mr} merged successfully.${nocolor}"
             else
-                echo -e "${red}❌ Merge failed for MR !${mr}. Aborting this variant.${nocolor}"
-                return # Pula para a próxima variante se falhar
+                echo -e "${red}❌ Merge failed for MR !${mr}. Skipping this MR but continuing build...${nocolor}"
+                git merge --abort || true
+                # Não abortamos mais o build inteiro, apenas pulamos o MR conflitante
             fi
         else
              echo -e "${red}❌ Could not fetch MR !${mr}.${nocolor}"
-             return
         fi
     done
 
@@ -157,18 +158,26 @@ EOF
 		-Db_lto=true -Dvulkan-beta=true -Dhave_librt=false -Ddefault_library=shared \
 		2>&1 | tee "$workdir/log_meson_$variant_name.txt"
 
-    ninja -C "$build_dir" 2>&1 | tee "$workdir/log_ninja_$variant_name.txt"
+    if ninja -C "$build_dir" 2>&1 | tee "$workdir/log_ninja_$variant_name.txt"; then
+        echo -e "${green}Compilation successful.${nocolor}"
+    else
+        echo -e "${red}Compilation failed for $variant_name.${nocolor}"
+        return
+    fi
 
     # 5. Empacotar
     echo -e "${green}--- Packaging ---${nocolor}"
     local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
     if [ ! -f "$lib_path" ]; then
-        echo -e "${red}Build failed for $variant_name${nocolor}"
+        echo -e "${red}Build failed for $variant_name (lib not found)${nocolor}"
         return
     fi
 
+    # Garante diretório limpo para este pacote
+    if [ -d "$package_dir" ]; then rm -rf "$package_dir"; fi
     mkdir -p "$package_dir"
-    cp "$lib_path" "$package_temp/lib_temp.so" 2>/dev/null || cp "$lib_path" "$package_dir/libvulkan_freedreno.so"
+    
+    cp "$lib_path" "$package_dir/libvulkan_freedreno.so"
     
     cd "$package_dir"
     patchelf --set-soname "vulkan.adreno.so" libvulkan_freedreno.so
@@ -179,7 +188,7 @@ EOF
 {
   "schemaVersion": 1,
   "name": "Turnip ($variant_name) - $date_meta",
-  "description": "Mesa $version_str + MRs !${mrs_to_merge[*]} + VK1.4 Patch. Commit $commit_hash",
+  "description": "Mesa $version_str + MR !${mrs_to_merge[*]} + VK1.4 Patch. Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
@@ -201,8 +210,8 @@ generate_release_info() {
     
     echo "Automated Build containing 2 variants:" > description
     echo "" >> description
-    echo "1. **Mesa Main:** Upstream Mesa + MRs !38451 & !35894 + VK1.4 Patch" >> description
-    echo "2. **PixelyIon:** PixelyIon Fork + MRs !38451 & !35894 + VK1.4 Patch" >> description
+    echo "1. **Mesa Main:** Upstream Mesa + MR !${mrs_to_merge[*]} + VK1.4 Patch" >> description
+    echo "2. **PixelyIon:** PixelyIon Fork + MR !${mrs_to_merge[*]} + VK1.4 Patch" >> description
 }
 
 # ===========================
