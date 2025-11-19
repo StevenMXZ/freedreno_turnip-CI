@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Dual Builder (Clean Main & PixelyIon + A619 Fix Only)
+# Turnip Dual Builder (Main & Danil + A619 Fix)
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -50,7 +50,7 @@ prepare_ndk(){
 
 # Função genérica para construir uma variante
 build_variant() {
-    local variant_name=$1  # Ex: Main, PixelyIon
+    local variant_name=$1  # Ex: Main, Danil
     local repo_url=$2
     local branch=$3
     
@@ -67,26 +67,28 @@ build_variant() {
     # Clone completo
     git clone "$repo_url" "$source_dir"
     cd "$source_dir"
+    echo -e "${green}Checking out $branch...${nocolor}"
     git checkout "$branch" || git checkout main
 
-    # --- APLICAR APENAS O FIX DA A619 (Nuclear) ---
-    # Isso é essencial para não congelar o seu dispositivo.
-    echo -e "${green}--- Applying A619 NUCLEAR Freeze Fix ---${nocolor}"
+    # --- APLICAR FIX DA A619 (Nuclear: Desativar Cache Coerente) ---
+    echo -e "${green}--- Applying A619 Freeze Fix (No Cached Mem) ---${nocolor}"
     
-    # PARTE 1: Reverter a função específica em tu_query.cc
+    # Reverter a função específica em tu_query.cc (se existir)
     if [ -f src/freedreno/vulkan/tu_query.cc ]; then
 		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
 	fi
 
-    # PARTE 2: Matar a flag de cache globalmente
+    # Forçar has_cached_coherent_memory = false
     if [ -f src/freedreno/vulkan/tu_device.cc ]; then
         sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
     fi
+    
+    # Substituição global para garantir que a flag de cache nunca seja usada
     grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
 		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
 		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
 	done
-    echo -e "${green}✅ A619 Nuclear Fix applied (No Cached Mem).${nocolor}"
+    echo -e "${green}✅ A619 Fix applied.${nocolor}"
 
 
     # Info do Commit
@@ -127,7 +129,10 @@ EOF
 		-Db_lto=true -Dvulkan-beta=true -Ddefault_library=shared \
 		2>&1 | tee "$workdir/log_meson_$variant_name.txt"
 
-    ninja -C "$build_dir" 2>&1 | tee "$workdir/log_ninja_$variant_name.txt"
+    if ! ninja -C "$build_dir" 2>&1 | tee "$workdir/log_ninja_$variant_name.txt"; then
+        echo -e "${red}Compilation failed for $variant_name.${nocolor}"
+        return
+    fi
 
     # 5. Empacotar
     echo -e "${green}--- Packaging $variant_name ---${nocolor}"
@@ -145,14 +150,14 @@ EOF
     patchelf --set-soname "vulkan.adreno.so" libvulkan_freedreno.so
     mv libvulkan_freedreno.so "vulkan.ad07XX.so"
 
-    local date_meta=$(date +'%Y-%m-%d')
-    # CORREÇÃO: Nome curto e sem espaços para evitar erro de dlopen
-    local short_name="Turnip-${variant_name}-${commit_hash}"
+    local date_meta=$(date +'%b %d, %Y')
+    # Nome curto para evitar erro de dlopen
+    local meta_name="Turnip-${variant_name}-${commit_hash}"
     
     cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "$short_name",
+  "name": "$meta_name",
   "description": "Mesa $version_str ($variant_name) + A619 Fix. Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
@@ -160,7 +165,6 @@ EOF
 }
 EOF
     
-    # Zip com nome limpo
     local zip_name="turnip_${variant_name}_${commit_hash}.zip"
     zip -9 "$workdir/$zip_name" ./*
     echo -e "${green}✅ Created: $workdir/$zip_name${nocolor}"
@@ -171,16 +175,15 @@ generate_release_info() {
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
     
-    echo "Turnip-Dual-${date_tag}" > tag
-    echo "Turnip Dual Build (Clean + A619 Fix) - ${date_tag}" > release
+    echo "Turnip-Dual-Danil-${date_tag}" > tag
+    echo "Turnip Dual Build (Main & Danil + A619 Fix) - ${date_tag}" > release
     
     echo "Automated Build containing 2 variants:" > description
     echo "" >> description
     echo "**Common Features:** A619 Freeze Fix (No Cached Mem) applied to ALL builds." >> description
-    echo "**Removed:** Fake VK 1.4 patch and unstable MRs." >> description
     echo "" >> description
     echo "1. **Mesa Main:** Official Upstream Mesa" >> description
-    echo "2. **PixelyIon:** Fork branch \`tu-newat\`" >> description
+    echo "2. **Danil:** Fork \`tu-newat-fixes\` (Updated link)" >> description
 }
 
 # ===========================
@@ -189,11 +192,11 @@ generate_release_info() {
 check_deps
 prepare_ndk
 
-# VARIANT 1: Mesa Main (Sem MRs extras)
+# VARIANT 1: Mesa Main (Estável)
 build_variant "Main" "https://gitlab.freedesktop.org/mesa/mesa.git" "main"
 
-# VARIANT 2: PixelyIon (Sem MRs extras)
-build_variant "PixelyIon" "https://gitlab.freedesktop.org/PixelyIon/mesa.git" "tu-newat"
+# VARIANT 2: Danil's Fork (tu-newat-fixes)
+build_variant "Danil" "https://gitlab.freedesktop.org/Danil/mesa.git" "tu-newat-fixes"
 
 generate_release_info
 
