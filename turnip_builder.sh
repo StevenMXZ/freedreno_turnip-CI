@@ -64,20 +64,18 @@ prepare_source(){
 	# --- APLICANDO CORREÇÃO PARA A619 (Revertendo lógica de cache) ---
 	echo -e "${green}Applying fixes for A619 freeze (cached memory)...${nocolor}"
 
-	# 1. Reverte a mudança específica da commit 83212054e07 em tu_query.cc
-	# Troca tu_bo_init_new_cached de volta para tu_bo_init_new
+	# 1. Reverte a mudança específica da commit 83212054e07 em tu_query.cc (se o arquivo existir)
 	if [ -f src/freedreno/vulkan/tu_query.cc ]; then
 		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
 		echo "Reverted tu_bo_init_new_cached in tu_query.cc"
 	fi
 
-	# 2. Abordagem Nuclear: Encontra onde a flag de cache é adicionada e a remove.
-	# Procura pela lógica ternária que habilita o bit CACHED e substitui por 0.
+	# 2. Abordagem Nuclear: Encontra onde a flag de cache é usada e a desativa.
 	# Isso garante que nenhuma outra parte do código consiga habilitar o cache de CPU.
 	grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
-		# Substitui a lógica "(condição ? CACHED_BIT : 0)" por "0"
+		# Substitui a lógica ternária "(condição ? CACHED_BIT : 0)" por "0"
 		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
-		# Substitui apenas a flag se ela estiver solta (caso a sintaxe seja diferente)
+		# Substitui apenas a flag se ela estiver solta
 		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
 		echo "Disabled Cached Bit in $file"
 	done
@@ -129,10 +127,12 @@ EOF
 
 	cd "$source_dir"
 
+	# Variáveis de ambiente para ajudar na compilação
 	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
+	# REMOVIDO: -Dhave_librt=false (causava erro) e -Dshared-glapi=enabled (depreciado)
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -143,10 +143,8 @@ EOF
 		-Dfreedreno-kmds=kgsl \
 		-Degl=disabled \
 		-Dglx=disabled \
-		-Dshared-glapi=enabled \
 		-Db_lto=true \
 		-Dvulkan-beta=true \
-		-Dhave_librt=false \
 		-Ddefault_library=shared \
 		2>&1 | tee "$workdir/meson_log"
 
@@ -163,7 +161,8 @@ package_driver(){
 	local build_dir="$source_dir/build"
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
-	
+	local output_suffix="no_cached_mem"
+
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
 		exit 1
@@ -211,7 +210,7 @@ generate_release_info() {
     echo "### Build Details:" >> description
     echo "**Base:** Mesa main branch" >> description
     echo "**Patches Applied:**" >> description
-    echo "1. Reverted \`tu_bo_init_new_cached\` usage in \`tu_query.cc\` (fixes regressions from commit \`83212054e07\`)." >> description
+    echo "1. Reverted \`tu_bo_init_new_cached\` usage in \`tu_query.cc\`." >> description
     echo "2. Globally disabled \`VK_MEMORY_PROPERTY_HOST_CACHED_BIT\`." >> description
     echo "**Purpose:** Fix system freezes on Adreno 619/6xx devices caused by broken IO coherency." >> description
     echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
