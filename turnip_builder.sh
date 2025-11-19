@@ -66,12 +66,10 @@ prepare_source(){
 	# --- APLICANDO O PATCH PARA CORRIGIR CONGELAMENTOS (A619) ---
 	echo -e "${green}Applying patch: Force Disable Cached Coherent Memory...${nocolor}"
 	
-	# Esta linha força a flag de capacidade do dispositivo para FALSE em tu_device.cc
-	# Isso desativa efetivamente a lógica que causa o freeze, independentemente de onde ela é usada.
+	# Força a flag de capacidade do dispositivo para FALSE em tu_device.cc
 	sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
 	
-	# Por segurança, tenta substituir também no local da macro se ela estiver em um header (tu_bo.h ou similar)
-	# Substitui a condicional ternária para retornar sempre 0 (desativado)
+	# Substitui a condicional ternária em outros arquivos por segurança
 	grep -r "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | cut -d: -f1 | sort | uniq | while read file; do
 		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
 	done
@@ -123,11 +121,12 @@ EOF
 
 	cd "$source_dir"
 
-	# Configurações padrão e estáveis
+	# Configurações de ambiente
 	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
+	# REMOVIDO: -Dhave_librt=false e -Dshared-glapi=enabled
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -138,10 +137,8 @@ EOF
 		-Dfreedreno-kmds=kgsl \
 		-Degl=disabled \
 		-Dglx=disabled \
-		-Dshared-glapi=enabled \
 		-Db_lto=true \
 		-Dvulkan-beta=true \
-		-Dhave_librt=false \
 		-Ddefault_library=shared \
 		2>&1 | tee "$workdir/meson_log"
 
@@ -158,7 +155,6 @@ package_driver(){
 	local build_dir="$source_dir/build"
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
-	# Sufixo indicando o patch aplicado
 	local output_suffix="no_cached_mem"
 
 	if [ ! -f "$lib_path" ]; then
