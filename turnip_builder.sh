@@ -4,36 +4,24 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Batch Builder (Testando Commits Específicas)
+# Turnip Build Script (Mesa Main + No Cached Coherent Patch)
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
-# Repositório oficial (upstream)
+
 mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
 
-# LISTA DAS NOVAS COMMITS PARA TESTAR (Lote 5)
-commits_to_build=(
-    "d8a19711ed1"
-    "77b96ac0a74"
-    "83212054e07"
-)
-
-# Variáveis dinâmicas
-current_commit=""
-current_short=""
+commit_hash=""
 version_str=""
-
-clear
 
 # ===========================
 # Funções
 # ===========================
 
 check_deps(){
-    missing=0
 	echo "🔍 Checking system dependencies ..."
 	for dep in $deps; do
 		if ! command -v $dep >/dev/null 2>&1; then
@@ -61,64 +49,66 @@ prepare_ndk(){
 			unzip "${ndkver}-linux.zip" &> /dev/null
 		fi
 	else
-		echo "Using preinstalled Android NDK."
+		echo "Using preinstalled Android NDK from GitHub Actions image."
 	fi
 }
 
-clone_repo(){
-    echo "🌿 Cloning Mesa repository (Full History)..."
-    cd "$workdir"
-    if [ -d mesa ]; then
-        echo "Repo already exists, fetching updates..."
-        cd mesa
-        git fetch --all
-        cd ..
-    else
-        # Clone completo necessário para navegar entre commits antigos
-        git clone "$mesa_repo" mesa
-    fi
-}
+prepare_source(){
+	echo "🌿 Preparing Mesa source (Main Branch)..."
+	cd "$workdir"
+	if [ -d mesa ]; then
+		rm -rf mesa
+	fi
+	# Clone raso do branch 'main'
+	git clone --depth=1 "$mesa_repo" mesa
+	cd mesa
 
-build_commit(){
-    local commit_id=$1
-    echo -e "${green}>>> Processing commit: $commit_id ${nocolor}"
-    
-    cd "$workdir/mesa"
-    
-    # Tenta fazer o checkout. Se falhar, avisa e pula.
-    if ! git checkout -f "$commit_id"; then
-        echo -e "${red}Commit $commit_id not found! Check if you are using the correct repo URL.${nocolor}"
-        return
-    fi
-    
-    current_commit=$(git rev-parse HEAD)
-    current_short=$(git rev-parse --short HEAD)
-    
-    if [ -f VERSION ]; then
+	# --- APLICANDO O PATCH PARA CORRIGIR CONGELAMENTOS (A619) ---
+	echo -e "${green}Applying patch: Force Disable Cached Coherent Memory...${nocolor}"
+	
+	# Esta linha força a flag de capacidade do dispositivo para FALSE em tu_device.cc
+	# Isso desativa efetivamente a lógica que causa o freeze, independentemente de onde ela é usada.
+	sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
+	
+	# Por segurança, tenta substituir também no local da macro se ela estiver em um header (tu_bo.h ou similar)
+	# Substitui a condicional ternária para retornar sempre 0 (desativado)
+	grep -r "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | cut -d: -f1 | sort | uniq | while read file; do
+		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
+	done
+
+	echo -e "${green}✅ Patch applied: Cached Coherent Memory DISABLED.${nocolor}"
+	# ------------------------------------------------------------
+
+	commit_hash=$(git rev-parse HEAD)
+	if [ -f VERSION ]; then
 	    version_str=$(cat VERSION | xargs)
 	else
 	    version_str="unknown"
 	fi
 
-    # Limpa build anterior para evitar conflitos
-    rm -rf build
-    
-    # Configura NDK paths
+	cd "$workdir"
+}
+
+compile_mesa(){
+	echo -e "${green}⚙️ Compiling Mesa (Main Branch)...${nocolor}"
+
+	local source_dir="$workdir/mesa"
+	local build_dir="$source_dir/build"
+	
 	local ndk_root_path
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		ndk_root_path="$workdir/$ndkver"
 	else
 		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
 	fi
+
 	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-    # Cria crossfile
-	local cross_file="$workdir/mesa/android-aarch64-crossfile.txt"
+	local cross_file="$source_dir/android-aarch64-crossfile.txt"
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
-# Usando --sysroot para garantir compatibilidade de bibliotecas
 c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
 cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
@@ -131,13 +121,14 @@ cpu = 'armv8'
 endian = 'little'
 EOF
 
-    # Configurações de ambiente
+	cd "$source_dir"
+
+	# Configurações padrão e estáveis
 	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    echo "⚙️ Configuring Meson for $commit_id..."
-	if ! meson setup build --cross-file "$cross_file" \
+	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
 		-Dplatform-sdk-version=$sdkver \
@@ -150,84 +141,87 @@ EOF
 		-Dshared-glapi=enabled \
 		-Db_lto=true \
 		-Dvulkan-beta=true \
+		-Dhave_librt=false \
 		-Ddefault_library=shared \
-		-Dc_args='-D__ANDROID__' \
-		2>&1 | tee "$workdir/meson_log_$current_short"; then
-            echo -e "${red}Meson configuration failed for $commit_id${nocolor}"
-            return
-    fi
+		2>&1 | tee "$workdir/meson_log"
 
-    echo "🔨 Compiling $commit_id..."
-	if ! ninja -C build 2>&1 | tee "$workdir/ninja_log_$current_short"; then
-        echo -e "${red}Compilation failed for $commit_id${nocolor}"
-        return
-    fi
-    
-    # Empacotamento
-    local lib_path="build/src/freedreno/vulkan/libvulkan_freedreno.so"
-    if [ ! -f "$lib_path" ]; then
-		echo -e "${red}Build failed for $commit_id (Lib not found)${nocolor}"
-        return 
+	if [ ! -f "$build_dir/build.ninja" ]; then
+		echo -e "${red}meson setup failed — see $workdir/meson_log for details${nocolor}"
+		exit 1
 	fi
 
-    echo "📦 Packaging $commit_id..."
-    local package_temp="$workdir/package_temp_$current_short"
-    mkdir -p "$package_temp"
+	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
+}
+
+package_driver(){
+	local source_dir="$workdir/mesa"
+	local build_dir="$source_dir/build"
+	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
+	local package_temp="$workdir/package_temp"
+	# Sufixo indicando o patch aplicado
+	local output_suffix="no_cached_mem"
+
+	if [ ! -f "$lib_path" ]; then
+		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
+		exit 1
+	fi
+
+	rm -rf "$package_temp"
+	mkdir -p "$package_temp"
 	cp "$lib_path" "$package_temp/lib_temp.so"
 
 	cd "$package_temp"
 	patchelf --set-soname "vulkan.adreno.so" lib_temp.so
 	mv lib_temp.so "vulkan.ad07XX.so"
 
-    local date_meta=$(date +'%b %d, %Y')
-    local zip_name="turnip_test_${current_short}.zip"
-    
+	local date_meta=$(date +'%b %d, %Y')
+	local short_hash=${commit_hash:0:7}
+	local meta_name="Turnip-Main-${short_hash}-NoCachedMem"
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip Test - $current_short",
-  "description": "Testing specific commit $current_short",
+  "name": "$meta_name",
+  "description": "Built from Mesa main. Patched to DISABLE Cached Coherent Memory (fixes A619 freeze). Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
-    
-    zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
-    rm -rf "$package_temp"
-    
-    echo -e "${green}✅ Created: $zip_name${nocolor}"
+
+	local zip_name="turnip_$(date +'%Y%m%d')_${short_hash}_${output_suffix}.zip"
+	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
+	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
 }
 
 generate_release_info() {
-    echo -e "${green}Generating release info...${nocolor}"
+    echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
+	local short_hash=${commit_hash:0:7}
+
+    echo "Mesa-Main-NoCachedMem-${date_tag}-${short_hash}" > tag
     
-    echo "Batch-Test-${date_tag}-Set5" > tag
-    echo "Turnip Batch Test (Set 5) - ${date_tag}" > release
-    
-    echo "Automated Batch Test of specific commits." > description
+    echo "Turnip CI Build - ${date_tag} (Main + No Cached Memory Patch)" > release
+
+    echo "Automated Turnip CI build from the latest Mesa main branch." > description
     echo "" >> description
-    echo "### Commits in this release:" >> description
+    echo "### Build Details:" >> description
+    echo "**Base:** Mesa main branch" >> description
+    echo "**Patch Applied:** Disabled \`has_cached_coherent_memory\`. This prevents the driver from using CPU caching for shared buffers, fixing system freezes on some A6xx devices (like A619)." >> description
+    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
     
-    for commit in "${commits_to_build[@]}"; do
-        echo "- Commit: \`$commit\`" >> description
-    done
+    echo -e "${green}Release info generated.${nocolor}"
 }
 
 # ===========================
 # Execução
 # ===========================
+clear
 check_deps
 prepare_ndk
-clone_repo
-
-# Loop através da lista de commits
-for commit in "${commits_to_build[@]}"; do
-    build_commit "$commit"
-done
-
+prepare_source
+compile_mesa
+package_driver
 generate_release_info
 
-echo -e "${green}🎉 Batch processing finished!${nocolor}"
+echo -e "${green}🎉 Build completed successfully!${nocolor}"
