@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Build Script (A710 Special: Chip ID + Force GMEM)
+# Turnip Build Script (Mesa Main + Unsup GPUs GMEM Patch)
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -57,63 +57,43 @@ prepare_source(){
 	echo "🌿 Preparing Mesa source (Main Branch)..."
 	cd "$workdir"
 	rm -rf mesa
+	# Clone raso do branch 'main'
 	git clone --depth=1 "$mesa_repo" mesa
 	cd mesa
 
-	# --- 1. ADICIONAR CHIP ID DA ADRENO 710 ---
-	echo -e "${green}Applying Patch: Add Adreno 710 Chip ID...${nocolor}"
-	
-	# Criamos um patch temporário para inserir a definição da A710
-	# Isso é necessário porque o 'sed' seria muito complexo para inserir várias linhas
-	cat <<'EOF' > a710_device.patch
---- a/src/freedreno/common/freedreno_devices.py
-+++ b/src/freedreno/common/freedreno_devices.py
-@@ -1074,6 +1074,24 @@
-         raw_magic_regs = a740_raw_magic_regs,
-     ))
+	# --- APLICANDO O PATCH UNSUP GPUS GMEM ---
+	echo -e "${green}Applying Unsupported GPUs GMEM patch...${nocolor}"
+
+    # Criando o arquivo de patch com o conteúdo exato que você enviou
+	cat <<'EOF' > "$workdir/unsup_gpus_gmem.patch"
+diff --git a/src/freedreno/vulkan/tu_autotune.cc b/src/freedreno/vulkan/tu_autotune.cc
+index 23c37d2d8c4..8e079f9042e 100644
+--- a/src/freedreno/vulkan/tu_autotune.cc
++++ b/src/freedreno/vulkan/tu_autotune.cc
+@@ -1493,6 +1493,13 @@ tu_autotune_use_sysmem(struct tu_device *device,
+    if (render_area.width * render_area.height < MIN_SYSMEM_PIXELS)
+       return true;
  
-+add_gpus([
-+        GPUId(chip_id=0x07010000, name="FD710"),
-+        GPUId(chip_id=0xffff07010000, name="FD710"),
-+    ], A6xxGPUInfo(
-+        CHIP.A7XX,
-+        [a7xx_base, a7xx_gen1],
-+        num_ccu = 4,
-+        tile_align_w = 64,
-+        tile_align_h = 32,
-+        num_vsc_pipes = 32,
-+        cs_shared_mem_size = 32 * 1024,
-+        wave_granularity = 2,
-+        fibers_per_sp = 128 * 2 * 16,
-+        highest_bank_bit = 16,
-+        magic_regs = a730_magic_regs,
-+        raw_magic_regs = a730_raw_magic_regs,
-+    ))
++   /* For some unsupported GPUs, we need to force GMEM */
++   if (device->physical_device->info->chip == 710 ||
++       device->physical_device->info->chip == 720 ||
++       device->physical_device->info->chip == 722 ||
++       device->physical_device->info->chip == 725)
++      return false;
 +
- add_gpus([
-         GPUId(chip_id=0x07030001, name="FD730"),
-         GPUId(chip_id=0xffff07030001, name="FD730"),
+    /* If the user forced a mode, use it. */
+    if (autotune->force_mode != render_mode::NONE)
+       return autotune->force_mode == render_mode::SYSMEM;
 EOF
 
-	# Tenta aplicar o patch. Se falhar (porque já existe), avisa mas continua.
-	if patch -p1 < a710_device.patch; then
-		echo -e "${green}✅ A710 Chip ID added successfully.${nocolor}"
-	else
-		echo -e "${red}⚠️ Failed to add A710 Chip ID (Might already exist in Mesa Main). Continuing...${nocolor}"
-	fi
-
-
-	# --- 2. APLICAR HACK "FORCE GMEM" (Para A710) ---
-	echo -e "${green}Applying Hack: Force GMEM (Disable Sysmem)...${nocolor}"
-
-    # Encontra a função que decide usar sysmem e força o retorno 'false' logo no início.
-	if [ -f src/freedreno/vulkan/tu_autotune.cc ]; then
-		sed -i '/bool tu_autotune_use_sysmem(const struct tu_device \*device, const struct tu_render_pass \*pass)/a \    return false;' src/freedreno/vulkan/tu_autotune.cc
-        echo "✅ Forced GMEM in tu_autotune.cc"
+    # Aplicando o patch
+    if patch -p1 < "$workdir/unsup_gpus_gmem.patch"; then
+        echo -e "${green}✅ Patch 'unsup_gpus_gmem' applied successfully!${nocolor}"
     else
-        echo "${red}⚠️ Warning: tu_autotune.cc not found. GMEM hack not applied.${nocolor}"
+        echo -e "${red}❌ Failed to apply patch. Check if tu_autotune.cc changed.${nocolor}"
+        exit 1
     fi
-	# -----------------------------------------------
+	# ------------------------------------------------------------
 
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -126,7 +106,7 @@ EOF
 }
 
 compile_mesa(){
-	echo -e "${green}⚙️ Compiling Mesa...${nocolor}"
+	echo -e "${green}⚙️ Compiling Mesa (Main Branch)...${nocolor}"
 
 	local source_dir="$workdir/mesa"
 	local build_dir="$source_dir/build"
@@ -192,7 +172,7 @@ package_driver(){
 	local build_dir="$source_dir/build"
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
-    local output_suffix="A710_Fixed"
+	local output_suffix="unsup_gmem"
 
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
@@ -209,19 +189,19 @@ package_driver(){
 
 	local date_meta=$(date +'%b %d, %Y')
 	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-A710-${short_hash}-Fixed"
+	local meta_name="Turnip-Main-${short_hash}-UnsupGMEM"
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Mesa Main + A710 ID + Force GMEM (Fixes stability). Commit $commit_hash",
+  "description": "Mesa Main + Forced GMEM for A710/720/722/725. Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-	local zip_name="turnip_main_$(date +'%Y%m%d')_${short_hash}_${output_suffix}.zip"
+	local zip_name="turnip_$(date +'%Y%m%d')_${short_hash}_${output_suffix}.zip"
 	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
 	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
 }
@@ -232,17 +212,14 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Mesa-Main-A710Fix-${date_tag}-${short_hash}" > tag
-    
-    echo "Turnip CI Build - ${date_tag} (A710 Fixed)" > release
+    echo "Mesa-Main-UnsupGMEM-${date_tag}-${short_hash}" > tag
+    echo "Turnip CI Build - ${date_tag} (Unsup GPUs GMEM)" > release
 
-    echo "Automated Turnip CI build tailored for Adreno 710." > description
+    echo "Automated Turnip CI build from the latest Mesa main branch." > description
     echo "" >> description
     echo "### Build Details:" >> description
     echo "**Base:** Mesa main branch" >> description
-    echo "**Patches Applied:**" >> description
-    echo "1. Added **Adreno 710 (FD710)** Chip ID definition." >> description
-    echo "2. **Forced GMEM** rendering (Disabled Autotuner Sysmem) to fix crashes/instability on A710." >> description
+    echo "**Patch Applied:** Forced GMEM path for unsupported GPUs (710, 720, 722, 725)." >> description
     echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
