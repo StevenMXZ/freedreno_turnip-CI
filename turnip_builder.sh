@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Build Script (Mesa Main + Force GMEM for A710)
+# Turnip Build Script (A710 Special: Chip ID + Force GMEM)
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -57,22 +57,63 @@ prepare_source(){
 	echo "🌿 Preparing Mesa source (Main Branch)..."
 	cd "$workdir"
 	rm -rf mesa
-	# Clone raso do branch 'main'
 	git clone --depth=1 "$mesa_repo" mesa
 	cd mesa
 
-	# --- APLICAR HACK "FORCE GMEM" (Para A710) ---
-	echo -e "${green}Applying Force GMEM hack (Disable Autotuner Sysmem)...${nocolor}"
+	# --- 1. ADICIONAR CHIP ID DA ADRENO 710 ---
+	echo -e "${green}Applying Patch: Add Adreno 710 Chip ID...${nocolor}"
+	
+	# Criamos um patch temporário para inserir a definição da A710
+	# Isso é necessário porque o 'sed' seria muito complexo para inserir várias linhas
+	cat <<'EOF' > a710_device.patch
+--- a/src/freedreno/common/freedreno_devices.py
++++ b/src/freedreno/common/freedreno_devices.py
+@@ -1074,6 +1074,24 @@
+         raw_magic_regs = a740_raw_magic_regs,
+     ))
+ 
++add_gpus([
++        GPUId(chip_id=0x07010000, name="FD710"),
++        GPUId(chip_id=0xffff07010000, name="FD710"),
++    ], A6xxGPUInfo(
++        CHIP.A7XX,
++        [a7xx_base, a7xx_gen1],
++        num_ccu = 4,
++        tile_align_w = 64,
++        tile_align_h = 32,
++        num_vsc_pipes = 32,
++        cs_shared_mem_size = 32 * 1024,
++        wave_granularity = 2,
++        fibers_per_sp = 128 * 2 * 16,
++        highest_bank_bit = 16,
++        magic_regs = a730_magic_regs,
++        raw_magic_regs = a730_raw_magic_regs,
++    ))
++
+ add_gpus([
+         GPUId(chip_id=0x07030001, name="FD730"),
+         GPUId(chip_id=0xffff07030001, name="FD730"),
+EOF
+
+	# Tenta aplicar o patch. Se falhar (porque já existe), avisa mas continua.
+	if patch -p1 < a710_device.patch; then
+		echo -e "${green}✅ A710 Chip ID added successfully.${nocolor}"
+	else
+		echo -e "${red}⚠️ Failed to add A710 Chip ID (Might already exist in Mesa Main). Continuing...${nocolor}"
+	fi
+
+
+	# --- 2. APLICAR HACK "FORCE GMEM" (Para A710) ---
+	echo -e "${green}Applying Hack: Force GMEM (Disable Sysmem)...${nocolor}"
 
     # Encontra a função que decide usar sysmem e força o retorno 'false' logo no início.
-    # Isso obriga o driver a usar o caminho GMEM.
 	if [ -f src/freedreno/vulkan/tu_autotune.cc ]; then
 		sed -i '/bool tu_autotune_use_sysmem(const struct tu_device \*device, const struct tu_render_pass \*pass)/a \    return false;' src/freedreno/vulkan/tu_autotune.cc
-        echo "✅ Patch applied to tu_autotune.cc"
+        echo "✅ Forced GMEM in tu_autotune.cc"
     else
-        echo "${red}⚠️ Warning: tu_autotune.cc not found. Hack not applied.${nocolor}"
+        echo "${red}⚠️ Warning: tu_autotune.cc not found. GMEM hack not applied.${nocolor}"
     fi
-	# --- FIM DO HACK ---
+	# -----------------------------------------------
 
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -151,7 +192,7 @@ package_driver(){
 	local build_dir="$source_dir/build"
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
-    local output_suffix="force_gmem"
+    local output_suffix="A710_Fixed"
 
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
@@ -168,13 +209,12 @@ package_driver(){
 
 	local date_meta=$(date +'%b %d, %Y')
 	local short_hash=${commit_hash:0:7}
-    local meta_name="Turnip-Main-${short_hash}-ForceGMEM"
-    
+	local meta_name="Turnip-A710-${short_hash}-Fixed"
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Mesa Main + Force GMEM (Fix for A710). Commit $commit_hash",
+  "description": "Mesa Main + A710 ID + Force GMEM (Fixes stability). Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
@@ -187,19 +227,25 @@ EOF
 }
 
 generate_release_info() {
-    echo -e "${green}Generating release info...${nocolor}"
+    echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Mesa-Main-A710-${date_tag}-${short_hash}" > tag
-    echo "Turnip CI Build - ${date_tag} (A710 Force GMEM)" > release
+    echo "Mesa-Main-A710Fix-${date_tag}-${short_hash}" > tag
+    
+    echo "Turnip CI Build - ${date_tag} (A710 Fixed)" > release
 
-    echo "Automated Turnip CI build from Mesa main." > description
+    echo "Automated Turnip CI build tailored for Adreno 710." > description
     echo "" >> description
-    echo "**Target:** Adreno 710 (and similar A7xx)" >> description
-    echo "**Patch Applied:** Forced GMEM rendering path (Disabled Autotuner Sysmem decision)." >> description
+    echo "### Build Details:" >> description
+    echo "**Base:** Mesa main branch" >> description
+    echo "**Patches Applied:**" >> description
+    echo "1. Added **Adreno 710 (FD710)** Chip ID definition." >> description
+    echo "2. **Forced GMEM** rendering (Disabled Autotuner Sysmem) to fix crashes/instability on A710." >> description
     echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
+    
+    echo -e "${green}Release info generated.${nocolor}"
 }
 
 # ===========================
