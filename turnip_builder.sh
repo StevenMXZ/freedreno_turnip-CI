@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Build Script (Mesa Main + Unsup GPUs GMEM Dynamic Patch)
+# Turnip Build Script (Official Mesa Main - No Patches)
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -22,7 +22,6 @@ version_str=""
 # ===========================
 
 check_deps(){
-    missing=0
 	echo "🔍 Checking system dependencies ..."
 	for dep in $deps; do
 		if ! command -v $dep >/dev/null 2>&1; then
@@ -57,34 +56,14 @@ prepare_ndk(){
 prepare_source(){
 	echo "🌿 Preparing Mesa source (Main Branch)..."
 	cd "$workdir"
-	rm -rf mesa
-	# Clone raso do branch 'main'
+	if [ -d mesa ]; then
+		rm -rf mesa
+	fi
+	
+	echo "Cloning main Mesa repository..."
+	# Clone raso (profundidade 1) é suficiente e mais rápido
 	git clone --depth=1 "$mesa_repo" mesa
 	cd mesa
-
-	# --- APLICANDO O PATCH UNSUP GPUS GMEM (VIA SED) ---
-	echo -e "${green}Injecting Unsupported GPUs GMEM logic...${nocolor}"
-
-    # Esta abordagem é mais robusta que um arquivo .patch.
-    # Ela procura a função 'tu_autotune_use_sysmem' e insere o código logo após a abertura da chave '{'.
-    
-    if [ -f src/freedreno/vulkan/tu_autotune.cc ]; then
-        sed -i '/bool tu_autotune_use_sysmem/,/{/ {
-            /{/ a \
-   /* Hack: Force GMEM for specific chips (A710/A720/etc) */ \
-   if (device->physical_device->info->chip == 710 || \
-       device->physical_device->info->chip == 720 || \
-       device->physical_device->info->chip == 722 || \
-       device->physical_device->info->chip == 725) \
-      return false;
-        }' src/freedreno/vulkan/tu_autotune.cc
-        
-        echo -e "${green}✅ Logic injected into tu_autotune.cc successfully!${nocolor}"
-    else
-        echo -e "${red}❌ Failed to find tu_autotune.cc. Mesa structure might have changed.${nocolor}"
-        exit 1
-    fi
-	# ------------------------------------------------------------
 
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -92,7 +71,8 @@ prepare_source(){
 	else
 	    version_str="unknown"
 	fi
-
+    
+    echo -e "${green}✅ Source prepared. Commit: $commit_hash${nocolor}"
 	cd "$workdir"
 }
 
@@ -130,6 +110,7 @@ EOF
 
 	cd "$source_dir"
 
+	# Configurações de ambiente
 	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
@@ -163,8 +144,7 @@ package_driver(){
 	local build_dir="$source_dir/build"
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
-	local output_suffix="unsup_gmem"
-
+	
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
 		exit 1
@@ -180,19 +160,19 @@ package_driver(){
 
 	local date_meta=$(date +'%b %d, %Y')
 	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-Main-${short_hash}-UnsupGMEM"
+	local meta_name="Turnip-Main-${short_hash}"
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Mesa Main + Forced GMEM for A710/720/722/725. Commit $commit_hash",
+  "description": "Built from Mesa official main branch (Clean). Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-	local zip_name="turnip_$(date +'%Y%m%d')_${short_hash}_${output_suffix}.zip"
+	local zip_name="turnip_main_$(date +'%Y%m%d')_${short_hash}.zip"
 	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
 	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
 }
@@ -203,14 +183,14 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Mesa-Main-UnsupGMEM-${date_tag}-${short_hash}" > tag
-    echo "Turnip CI Build - ${date_tag} (Unsup GPUs GMEM)" > release
+    echo "Mesa-Main-${date_tag}-${short_hash}" > tag
+    echo "Turnip CI Build - ${date_tag} (Clean Main)" > release
 
     echo "Automated Turnip CI build from the latest Mesa main branch." > description
     echo "" >> description
     echo "### Build Details:" >> description
     echo "**Base:** Mesa main branch" >> description
-    echo "**Patch Applied:** Forced GMEM path for unsupported GPUs (710, 720, 722, 725)." >> description
+    echo "**Patches Applied:** None (Clean Build)" >> description
     echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
     
     echo -e "${green}Release info generated.${nocolor}"
