@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Build Script (Mesa Main + Unsup GPUs GMEM Patch)
+# Turnip Build Script (Mesa Main + Unsup GPUs GMEM Dynamic Patch)
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -22,6 +22,7 @@ version_str=""
 # ===========================
 
 check_deps(){
+    missing=0
 	echo "🔍 Checking system dependencies ..."
 	for dep in $deps; do
 		if ! command -v $dep >/dev/null 2>&1; then
@@ -61,36 +62,26 @@ prepare_source(){
 	git clone --depth=1 "$mesa_repo" mesa
 	cd mesa
 
-	# --- APLICANDO O PATCH UNSUP GPUS GMEM ---
-	echo -e "${green}Applying Unsupported GPUs GMEM patch...${nocolor}"
+	# --- APLICANDO O PATCH UNSUP GPUS GMEM (VIA SED) ---
+	echo -e "${green}Injecting Unsupported GPUs GMEM logic...${nocolor}"
 
-    # Criando o arquivo de patch com o conteúdo exato que você enviou
-	cat <<'EOF' > "$workdir/unsup_gpus_gmem.patch"
-diff --git a/src/freedreno/vulkan/tu_autotune.cc b/src/freedreno/vulkan/tu_autotune.cc
-index 23c37d2d8c4..8e079f9042e 100644
---- a/src/freedreno/vulkan/tu_autotune.cc
-+++ b/src/freedreno/vulkan/tu_autotune.cc
-@@ -1493,6 +1493,13 @@ tu_autotune_use_sysmem(struct tu_device *device,
-    if (render_area.width * render_area.height < MIN_SYSMEM_PIXELS)
-       return true;
- 
-+   /* For some unsupported GPUs, we need to force GMEM */
-+   if (device->physical_device->info->chip == 710 ||
-+       device->physical_device->info->chip == 720 ||
-+       device->physical_device->info->chip == 722 ||
-+       device->physical_device->info->chip == 725)
-+      return false;
-+
-    /* If the user forced a mode, use it. */
-    if (autotune->force_mode != render_mode::NONE)
-       return autotune->force_mode == render_mode::SYSMEM;
-EOF
-
-    # Aplicando o patch
-    if patch -p1 < "$workdir/unsup_gpus_gmem.patch"; then
-        echo -e "${green}✅ Patch 'unsup_gpus_gmem' applied successfully!${nocolor}"
+    # Esta abordagem é mais robusta que um arquivo .patch.
+    # Ela procura a função 'tu_autotune_use_sysmem' e insere o código logo após a abertura da chave '{'.
+    
+    if [ -f src/freedreno/vulkan/tu_autotune.cc ]; then
+        sed -i '/bool tu_autotune_use_sysmem/,/{/ {
+            /{/ a \
+   /* Hack: Force GMEM for specific chips (A710/A720/etc) */ \
+   if (device->physical_device->info->chip == 710 || \
+       device->physical_device->info->chip == 720 || \
+       device->physical_device->info->chip == 722 || \
+       device->physical_device->info->chip == 725) \
+      return false;
+        }' src/freedreno/vulkan/tu_autotune.cc
+        
+        echo -e "${green}✅ Logic injected into tu_autotune.cc successfully!${nocolor}"
     else
-        echo -e "${red}❌ Failed to apply patch. Check if tu_autotune.cc changed.${nocolor}"
+        echo -e "${red}❌ Failed to find tu_autotune.cc. Mesa structure might have changed.${nocolor}"
         exit 1
     fi
 	# ------------------------------------------------------------
