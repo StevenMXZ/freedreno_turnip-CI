@@ -39,7 +39,7 @@ check_deps(){
 }
 
 prepare_ndk(){
-	echo "📦 Preparing Android NDK ..."
+	echo " Preparing Android NDK ..."
 	mkdir -p "$workdir"
 	cd "$workdir"
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
@@ -61,7 +61,7 @@ build_variant() {
     local patch_mode=$3     # Modo de patch (none, a6xx_fix, oneui_fix)
 
     echo -e "\n${green}==============================================${nocolor}"
-    echo -e "${green}🚀 Building Variant: $variant_name -> $zip_name ${nocolor}"
+    echo -e "${green} Building Variant: $variant_name -> $zip_name ${nocolor}"
     echo -e "${green}==============================================${nocolor}"
 
     # 1. Limpar e Preparar Fonte (Garante build limpo a cada rodada)
@@ -79,7 +79,7 @@ build_variant() {
     # 2. Aplicar Patches (Baseado no modo)
     case "$patch_mode" in
         "a6xx_fix")
-            echo -e "${green}Applying a6xx Stability Fixes (No Cached Mem)...${nocolor}"
+            echo -e "${green}Applying a6xx Stability Fixes...${nocolor}"
             if [ -f src/freedreno/vulkan/tu_query.cc ]; then
                 sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
             fi
@@ -153,7 +153,7 @@ EOF
     local meta_desc=""
     case "$variant_name" in
         "Normal") meta_desc="Standard Mesa Main build." ;;
-        "a6xx")   meta_desc="Optimized for Adreno 6xx stability." ;;
+        "a6xx")   meta_desc="for Adreno 6xx stability." ;;
         "OneUI")  meta_desc="Patched for OneUI compatibility." ;;
     esac
 
@@ -197,7 +197,7 @@ generate_release_info() {
     echo "" >> description
     echo "### Downloads:" >> description
     echo "1. **$name_normal**: Standard build from main branch." >> description
-    echo "2. **$name_a6xx**: Stability fix for a6xx devices (No cached memory)." >> description
+    echo "2. **$name_a6xx**: fix for a6xx devices." >> description
     echo "3. **$name_oneui**: Includes UBWC hint fix for Samsung OneUI." >> description
 }
 
