@@ -4,20 +4,19 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Build Script (Mesa Main + Revert Cache Commits)
+# Turnip Build: Main + MR 38709 + A6xx Fix
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
-mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
 
-commit_hash=""
-version_str=""
+mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
+mr_num="38709" # VK_EXT_legacy_vertex_attributes
 
 # ===========================
-# Funções
+# Funções Auxiliares
 # ===========================
 
 check_deps(){
@@ -55,36 +54,51 @@ prepare_ndk(){
 prepare_source(){
 	echo "🌿 Preparing Mesa source (Main Branch)..."
 	cd "$workdir"
-	if [ -d mesa ]; then
-		rm -rf mesa
-	fi
-	# Clone raso do branch 'main'
-	git clone --depth=1 "$mesa_repo" mesa
+	if [ -d mesa ]; then rm -rf mesa; fi
+	
+    echo "Cloning Mesa Main..."
+	# Clone completo para permitir merge
+	git clone "$mesa_repo" mesa
 	cd mesa
 
-	# --- APLICANDO OS REVERTS (Neutralizando as commits) ---
-	echo -e "${green}Neutralizing Cached Memory logic for A619...${nocolor}"
+    # --- 1. MERGE DO MR 38709 ---
+    echo -e "${green}Configuring git & merging MR !${mr_num}...${nocolor}"
+	git config user.name "CI Builder"
+	git config user.email "ci@builder.com"
+    
+    git fetch origin "refs/merge-requests/${mr_num}/head"
+    if git merge --no-edit FETCH_HEAD; then
+		echo -e "${green}✅ MR !${mr_num} merged successfully!${nocolor}"
+	else
+		echo -e "${red}❌ Merge failed for MR !${mr_num}. Aborting.${nocolor}"
+		exit 1
+	fi
+    # ---------------------------
 
-    # 1. Reverter o uso no tu_query.cc (Desfaz o efeito da commit de uso)
-    # Troca a chamada da função "cached" pela versão normal antiga
+	# --- 2. APLICAR FIX DA A6XX (Nuclear) ---
+	echo -e "${green}Applying A6xx Stability Fixes (No Cached Mem)...${nocolor}"
+
+    # Reverter uso em tu_query.cc (se existir)
 	if [ -f src/freedreno/vulkan/tu_query.cc ]; then
 		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
-        echo "✅ Reverted usage in tu_query.cc"
+        echo "✅ Reverted tu_bo_init_new_cached in tu_query.cc"
 	fi
 
-    # 2. Neutralizar a definição no tu_device.h (Desfaz o efeito da commit de definição)
-    # Substitui a flag de cache por 0. Isso garante que mesmo se a função for chamada, 
-    # ela se comporte como a função antiga (sem cache).
-	if [ -f src/freedreno/vulkan/tu_device.h ]; then
-		# Remove a flag da lista de bits
-		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' src/freedreno/vulkan/tu_device.h
-        # Remove a lógica ternária se ela ainda existir
-        sed -i 's/dev->physical_device->has_cached_coherent_memory ? 0 : 0/0/g' src/freedreno/vulkan/tu_device.h
-        echo "✅ Neutered tu_bo_init_new_cached definition in tu_device.h"
+    # Desativar globalmente a flag de cache
+	if [ -f src/freedreno/vulkan/tu_device.cc ]; then
+        # Força a variável de capacidade para falso
+		sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
 	fi
-	# ---------------------------------------------------
+    
+    # Substituição global da flag
+	grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
+		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
+		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
+	done
+    echo -e "${green}✅ A6xx Nuclear Fix applied.${nocolor}"
+	# ----------------------------------------
 
-	commit_hash=$(git rev-parse HEAD)
+	commit_hash=$(git rev-parse --short HEAD)
 	if [ -f VERSION ]; then
 	    version_str=$(cat VERSION | xargs)
 	else
@@ -101,24 +115,19 @@ compile_mesa(){
 	local build_dir="$source_dir/build"
 	
 	local ndk_root_path
-	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
-		ndk_root_path="$workdir/$ndkver"
-	else
-		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
-	fi
+	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then ndk_root_path="$workdir/$ndkver"; else ndk_root_path="$ANDROID_NDK_LATEST_HOME"; fi
+	local ndk_bin="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
+	local sysroot="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
-	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-
-	local cross_file="$source_dir/android-aarch64-crossfile.txt"
+	local cross_file="$source_dir/android-cross.txt"
 	cat <<EOF > "$cross_file"
 [binaries]
-ar = '$ndk_bin_path/llvm-ar'
-c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
-cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+ar = '$ndk_bin/llvm-ar'
+c = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang', '--sysroot=$sysroot']
+cpp = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang++', '--sysroot=$sysroot']
 c_ld = 'lld'
 cpp_ld = 'lld'
-strip = '$ndk_bin_path/aarch64-linux-android-strip'
+strip = '$ndk_bin/aarch64-linux-android-strip'
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
@@ -128,6 +137,7 @@ EOF
 
 	cd "$source_dir"
 
+    # Flags limpas e corretas
 	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
@@ -148,11 +158,6 @@ EOF
 		-Ddefault_library=shared \
 		2>&1 | tee "$workdir/meson_log"
 
-	if [ ! -f "$build_dir/build.ninja" ]; then
-		echo -e "${red}meson setup failed — see $workdir/meson_log for details${nocolor}"
-		exit 1
-	fi
-
 	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
 }
 
@@ -161,7 +166,6 @@ package_driver(){
 	local build_dir="$source_dir/build"
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
-    local output_suffix="no_cache"
 
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
@@ -176,22 +180,24 @@ package_driver(){
 	patchelf --set-soname "vulkan.adreno.so" lib_temp.so
 	mv lib_temp.so "vulkan.ad07XX.so"
 
-	local date_meta=$(date +'%b %d, %Y')
-	local short_hash=${commit_hash:0:7}
-    local meta_name="Turnip-Main-${short_hash}-NoCache"
+	local date_meta=$(date +'%Y-%m-%d')
+    # Nome descritivo no meta.json
+	local meta_name="Turnip-MR${mr_num}-${commit_hash}"
     
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Mesa Main with cached memory commits neutralized (Fixes A619). Commit $commit_hash",
+  "description": "Mesa Main + MR !${mr_num} + A6xx Stability Fix. Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-	local zip_name="turnip_main_$(date +'%Y%m%d')_${short_hash}_${output_suffix}.zip"
+    # Nome do zip
+    local d_short=$(date +'%m%y')
+	local zip_name="Turnip-MR${mr_num}-a6xx-${d_short}.zip"
 	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
 	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
 }
@@ -199,17 +205,18 @@ EOF
 generate_release_info() {
     echo -e "${green}Generating release info...${nocolor}"
     cd "$workdir"
-    local date_tag=$(date +'%Y%m%d')
-	local short_hash=${commit_hash:0:7}
+    local date_tag=$(date +'%Y-%m-%d')
 
-    echo "Mesa-Main-NoCache-${date_tag}-${short_hash}" > tag
-    echo "Turnip CI Build - ${date_tag} (No Cached Memory)" > release
+    echo "Turnip-MR${mr_num}-${date_tag}" > tag
+    echo "Turnip Build (MR !${mr_num}) - ${date_tag}" > release
 
-    echo "Automated Turnip CI build from Mesa main." > description
+    echo "Automated Turnip CI build." > description
     echo "" >> description
-    echo "**Patch Applied:** Neutralized \`tu_bo_init_new_cached\` logic." >> description
-    echo "**Purpose:** Restore stability on Adreno 619 by disabling CPU caching for shared buffers (same behavior as older drivers)." >> description
-    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
+    echo "### Build Details:" >> description
+    echo "- **Base:** Mesa Main" >> description
+    echo "- **Feature:** Merged MR \`!${mr_num}\` (VK_EXT_legacy_vertex_attributes)." >> description
+    echo "- **Fix:** A6xx Stability Fix (No Cached Memory)." >> description
+    echo "- **Commit:** $commit_hash" >> description
 }
 
 # ===========================
