@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Build: cwabbott0 (tu-custom-resolve) + A619 Fix
+# Turnip Build: cwabbott0 (tu-custom-resolve) + A619 Fix (No Release)
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -61,14 +61,12 @@ prepare_source(){
 	if [ -d mesa ]; then rm -rf mesa; fi
 	
     echo "Cloning branch $mesa_branch..."
-    # Clona apenas o branch específico, economiza tempo e espaço
 	git clone --depth=1 --branch "$mesa_branch" "$mesa_repo" mesa
 	cd mesa
 
 	# --- APLICAR FIX DA A6XX (Nuclear) ---
 	echo -e "${green}Applying A6xx Stability Fixes (No Cached Mem)...${nocolor}"
 
-    # 1. Reverter uso em tu_query.cc ou tu_query_pool.cc (dependendo da versão do Mesa)
     if [ -f src/freedreno/vulkan/tu_query.cc ]; then
 		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
         echo "✅ Reverted tu_bo_init_new_cached in tu_query.cc"
@@ -77,19 +75,15 @@ prepare_source(){
         echo "✅ Reverted tu_bo_init_new_cached in tu_query_pool.cc"
 	fi
 
-    # 2. Desativar globalmente a flag de cache
 	if [ -f src/freedreno/vulkan/tu_device.cc ]; then
-        # Força a variável de capacidade para falso
 		sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
 	fi
     
-    # Substituição global da flag para garantir (Nuclear)
 	grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
 		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
 		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
 	done
     echo -e "${green}✅ A6xx Nuclear Fix applied.${nocolor}"
-	# ----------------------------------------
 
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -130,13 +124,12 @@ EOF
 
 	cd "$source_dir"
 
-    # Flags limpas
 	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
+    # REMOVIDO: -Dbuildtype=release
 	meson setup "$build_dir" --cross-file "$cross_file" \
-		-Dbuildtype=release \
 		-Dplatforms=android \
 		-Dplatform-sdk-version=$sdkver \
 		-Dandroid-stub=true \
@@ -175,14 +168,13 @@ package_driver(){
 
 	local date_meta=$(date +'%Y-%m-%d')
 	local short_hash=${commit_hash:0:7}
-	# Nome curto para evitar problemas de caminho
     local meta_name="Turnip-cwabbott0-${short_hash}"
     
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Branch: tu-custom-resolve + A6xx Stability Fix. Commit $commit_hash",
+  "description": "Branch: tu-custom-resolve + A6xx Stability Fix. Commit $commit_hash (Debug Build)",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
@@ -209,6 +201,7 @@ generate_release_info() {
     echo "- **Repo:** cwabbott0/mesa" >> description
     echo "- **Branch:** \`$mesa_branch\`" >> description
     echo "- **Fix:** A6xx Stability Fix (No Cached Memory)." >> description
+    echo "- **Build Type:** Default (Debug)" >> description
     echo "- **Commit:** $commit_hash" >> description
 }
 
