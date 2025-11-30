@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Build: Main + MR 38709 + A6xx Fix
+# Turnip Build: cwabbott0 (tu-custom-resolve) + A619 Fix
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -12,11 +12,15 @@ workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
 
-mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
-mr_num="38709" # VK_EXT_legacy_vertex_attributes
+# Configuração do Repositório Customizado
+mesa_repo="https://gitlab.freedesktop.org/cwabbott0/mesa.git"
+mesa_branch="review/tu-custom-resolve"
+
+commit_hash=""
+version_str=""
 
 # ===========================
-# Funções Auxiliares
+# Funções
 # ===========================
 
 check_deps(){
@@ -52,45 +56,34 @@ prepare_ndk(){
 }
 
 prepare_source(){
-	echo "🌿 Preparing Mesa source (Main Branch)..."
+	echo "🌿 Preparing Mesa source (cwabbott0)..."
 	cd "$workdir"
 	if [ -d mesa ]; then rm -rf mesa; fi
 	
-    echo "Cloning Mesa Main..."
-	# Clone completo para permitir merge
-	git clone "$mesa_repo" mesa
+    echo "Cloning branch $mesa_branch..."
+    # Clona apenas o branch específico, economiza tempo e espaço
+	git clone --depth=1 --branch "$mesa_branch" "$mesa_repo" mesa
 	cd mesa
 
-    # --- 1. MERGE DO MR 38709 ---
-    echo -e "${green}Configuring git & merging MR !${mr_num}...${nocolor}"
-	git config user.name "CI Builder"
-	git config user.email "ci@builder.com"
-    
-    git fetch origin "refs/merge-requests/${mr_num}/head"
-    if git merge --no-edit FETCH_HEAD; then
-		echo -e "${green}✅ MR !${mr_num} merged successfully!${nocolor}"
-	else
-		echo -e "${red}❌ Merge failed for MR !${mr_num}. Aborting.${nocolor}"
-		exit 1
-	fi
-    # ---------------------------
-
-	# --- 2. APLICAR FIX DA A6XX (Nuclear) ---
+	# --- APLICAR FIX DA A6XX (Nuclear) ---
 	echo -e "${green}Applying A6xx Stability Fixes (No Cached Mem)...${nocolor}"
 
-    # Reverter uso em tu_query.cc (se existir)
-	if [ -f src/freedreno/vulkan/tu_query.cc ]; then
+    # 1. Reverter uso em tu_query.cc ou tu_query_pool.cc (dependendo da versão do Mesa)
+    if [ -f src/freedreno/vulkan/tu_query.cc ]; then
 		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
         echo "✅ Reverted tu_bo_init_new_cached in tu_query.cc"
+    elif [ -f src/freedreno/vulkan/tu_query_pool.cc ]; then
+        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query_pool.cc
+        echo "✅ Reverted tu_bo_init_new_cached in tu_query_pool.cc"
 	fi
 
-    # Desativar globalmente a flag de cache
+    # 2. Desativar globalmente a flag de cache
 	if [ -f src/freedreno/vulkan/tu_device.cc ]; then
         # Força a variável de capacidade para falso
 		sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
 	fi
     
-    # Substituição global da flag
+    # Substituição global da flag para garantir (Nuclear)
 	grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
 		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
 		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
@@ -98,7 +91,7 @@ prepare_source(){
     echo -e "${green}✅ A6xx Nuclear Fix applied.${nocolor}"
 	# ----------------------------------------
 
-	commit_hash=$(git rev-parse --short HEAD)
+	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
 	    version_str=$(cat VERSION | xargs)
 	else
@@ -137,7 +130,7 @@ EOF
 
 	cd "$source_dir"
 
-    # Flags limpas e corretas
+    # Flags limpas
 	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
@@ -181,40 +174,40 @@ package_driver(){
 	mv lib_temp.so "vulkan.ad07XX.so"
 
 	local date_meta=$(date +'%Y-%m-%d')
-    # Nome descritivo no meta.json
-	local meta_name="Turnip-MR${mr_num}-${commit_hash}"
+	local short_hash=${commit_hash:0:7}
+	# Nome curto para evitar problemas de caminho
+    local meta_name="Turnip-cwabbott0-${short_hash}"
     
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Mesa Main + MR !${mr_num} + A6xx Stability Fix. Commit $commit_hash",
+  "description": "Branch: tu-custom-resolve + A6xx Stability Fix. Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-    # Nome do zip
-    local d_short=$(date +'%m%y')
-	local zip_name="Turnip-MR${mr_num}-a6xx-${d_short}.zip"
+	local zip_name="turnip_cwabbott0_$(date +'%Y%m%d')_${short_hash}.zip"
 	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
 	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
 }
 
 generate_release_info() {
-    echo -e "${green}Generating release info...${nocolor}"
+    echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
     cd "$workdir"
-    local date_tag=$(date +'%Y-%m-%d')
+    local date_tag=$(date +'%Y%m%d')
+	local short_hash=${commit_hash:0:7}
 
-    echo "Turnip-MR${mr_num}-${date_tag}" > tag
-    echo "Turnip Build (MR !${mr_num}) - ${date_tag}" > release
+    echo "Turnip-cwabbott0-${date_tag}-${short_hash}" > tag
+    echo "Turnip CI Build - ${date_tag} (cwabbott0 Fork)" > release
 
     echo "Automated Turnip CI build." > description
     echo "" >> description
     echo "### Build Details:" >> description
-    echo "- **Base:** Mesa Main" >> description
-    echo "- **Feature:** Merged MR \`!${mr_num}\` (VK_EXT_legacy_vertex_attributes)." >> description
+    echo "- **Repo:** cwabbott0/mesa" >> description
+    echo "- **Branch:** \`$mesa_branch\`" >> description
     echo "- **Fix:** A6xx Stability Fix (No Cached Memory)." >> description
     echo "- **Commit:** $commit_hash" >> description
 }
