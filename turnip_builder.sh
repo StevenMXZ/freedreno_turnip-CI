@@ -4,7 +4,7 @@ red='\033[0;31m'
 nocolor='\033[0m'
 
 # ===========================
-# Turnip Build: cwabbott0 (tu-custom-resolve) + A619 Fix (No Release)
+# Turnip Build: anholt (qcom-imgproc) + A619 Fix
 # ===========================
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
@@ -13,8 +13,8 @@ ndkver="android-ndk-r29"
 sdkver="35"
 
 # Configuração do Repositório Customizado
-mesa_repo="https://gitlab.freedesktop.org/cwabbott0/mesa.git"
-mesa_branch="review/tu-custom-resolve"
+mesa_repo="https://gitlab.freedesktop.org/anholt/mesa.git"
+mesa_branch="qcom-imgproc"
 
 commit_hash=""
 version_str=""
@@ -56,7 +56,7 @@ prepare_ndk(){
 }
 
 prepare_source(){
-	echo "🌿 Preparing Mesa source (cwabbott0)..."
+	echo "🌿 Preparing Mesa source (anholt)..."
 	cd "$workdir"
 	if [ -d mesa ]; then rm -rf mesa; fi
 	
@@ -67,6 +67,7 @@ prepare_source(){
 	# --- APLICAR FIX DA A6XX (Nuclear) ---
 	echo -e "${green}Applying A6xx Stability Fixes (No Cached Mem)...${nocolor}"
 
+    # 1. Reverter uso em tu_query.cc ou tu_query_pool.cc
     if [ -f src/freedreno/vulkan/tu_query.cc ]; then
 		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
         echo "✅ Reverted tu_bo_init_new_cached in tu_query.cc"
@@ -75,6 +76,7 @@ prepare_source(){
         echo "✅ Reverted tu_bo_init_new_cached in tu_query_pool.cc"
 	fi
 
+    # 2. Desativar globalmente a flag de cache
 	if [ -f src/freedreno/vulkan/tu_device.cc ]; then
 		sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
 	fi
@@ -128,8 +130,9 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # REMOVIDO: -Dbuildtype=release
+    # ADICIONADO DE VOLTA: -Dbuildtype=release
 	meson setup "$build_dir" --cross-file "$cross_file" \
+		-Dbuildtype=release \
 		-Dplatforms=android \
 		-Dplatform-sdk-version=$sdkver \
 		-Dandroid-stub=true \
@@ -168,20 +171,20 @@ package_driver(){
 
 	local date_meta=$(date +'%Y-%m-%d')
 	local short_hash=${commit_hash:0:7}
-    local meta_name="Turnip-cwabbott0-${short_hash}"
+    local meta_name="Turnip-anholt-${short_hash}"
     
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Branch: tu-custom-resolve + A6xx Stability Fix. Commit $commit_hash (Debug Build)",
+  "description": "Branch: qcom-imgproc + A6xx Stability Fix. Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-	local zip_name="turnip_cwabbott0_$(date +'%Y%m%d')_${short_hash}.zip"
+	local zip_name="turnip_anholt_$(date +'%Y%m%d')_${short_hash}.zip"
 	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
 	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
 }
@@ -192,16 +195,16 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Turnip-cwabbott0-${date_tag}-${short_hash}" > tag
-    echo "Turnip CI Build - ${date_tag} (cwabbott0 Fork)" > release
+    echo "Turnip-anholt-${date_tag}-${short_hash}" > tag
+    echo "Turnip CI Build - ${date_tag} (anholt Fork)" > release
 
     echo "Automated Turnip CI build." > description
     echo "" >> description
     echo "### Build Details:" >> description
-    echo "- **Repo:** cwabbott0/mesa" >> description
+    echo "- **Repo:** anholt/mesa" >> description
     echo "- **Branch:** \`$mesa_branch\`" >> description
     echo "- **Fix:** A6xx Stability Fix (No Cached Memory)." >> description
-    echo "- **Build Type:** Default (Debug)" >> description
+    echo "- **Build Type:** Release" >> description
     echo "- **Commit:** $commit_hash" >> description
 }
 
