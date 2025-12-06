@@ -3,28 +3,17 @@ green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
 
-# ===========================
-# Turnip Build: anholt (qcom-imgproc) + A619 Fix
-# ===========================
-
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
-
-# Configuração do Repositório Customizado
-mesa_repo="https://gitlab.freedesktop.org/anholt/mesa.git"
-mesa_branch="qcom-imgproc"
+mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
 
 commit_hash=""
 version_str=""
 
-# ===========================
-# Funções
-# ===========================
-
 check_deps(){
-	echo "🔍 Checking system dependencies ..."
+	echo "Checking system dependencies ..."
 	for dep in $deps; do
 		if ! command -v $dep >/dev/null 2>&1; then
 			echo -e "$red Missing dependency: $dep$nocolor"
@@ -40,7 +29,7 @@ check_deps(){
 }
 
 prepare_ndk(){
-	echo "📦 Preparing Android NDK ..."
+	echo "Preparing NDK ..."
 	mkdir -p "$workdir"
 	cd "$workdir"
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
@@ -56,27 +45,16 @@ prepare_ndk(){
 }
 
 prepare_source(){
-	echo "🌿 Preparing Mesa source (anholt)..."
+	echo "Preparing Mesa source..."
 	cd "$workdir"
 	if [ -d mesa ]; then rm -rf mesa; fi
-	
-    echo "Cloning branch $mesa_branch..."
-	git clone --depth=1 --branch "$mesa_branch" "$mesa_repo" mesa
+	git clone --depth=1 "$mesa_repo" mesa
 	cd mesa
 
-	# --- APLICAR FIX DA A6XX (Nuclear) ---
-	echo -e "${green}Applying A6xx Stability Fixes (No Cached Mem)...${nocolor}"
-
-    # 1. Reverter uso em tu_query.cc ou tu_query_pool.cc
-    if [ -f src/freedreno/vulkan/tu_query.cc ]; then
+	if [ -f src/freedreno/vulkan/tu_query.cc ]; then
 		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
-        echo "✅ Reverted tu_bo_init_new_cached in tu_query.cc"
-    elif [ -f src/freedreno/vulkan/tu_query_pool.cc ]; then
-        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query_pool.cc
-        echo "✅ Reverted tu_bo_init_new_cached in tu_query_pool.cc"
 	fi
 
-    # 2. Desativar globalmente a flag de cache
 	if [ -f src/freedreno/vulkan/tu_device.cc ]; then
 		sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
 	fi
@@ -85,7 +63,6 @@ prepare_source(){
 		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
 		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
 	done
-    echo -e "${green}✅ A6xx Nuclear Fix applied.${nocolor}"
 
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -98,25 +75,30 @@ prepare_source(){
 }
 
 compile_mesa(){
-	echo -e "${green}⚙️ Compiling Mesa...${nocolor}"
+	echo -e "${green}Compiling Mesa...${nocolor}"
 
 	local source_dir="$workdir/mesa"
 	local build_dir="$source_dir/build"
 	
 	local ndk_root_path
-	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then ndk_root_path="$workdir/$ndkver"; else ndk_root_path="$ANDROID_NDK_LATEST_HOME"; fi
-	local ndk_bin="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
-	local sysroot="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
+		ndk_root_path="$workdir/$ndkver"
+	else
+		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
+	fi
 
-	local cross_file="$source_dir/android-cross.txt"
+	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
+	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+
+	local cross_file="$source_dir/android-aarch64-crossfile.txt"
 	cat <<EOF > "$cross_file"
 [binaries]
-ar = '$ndk_bin/llvm-ar'
-c = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang', '--sysroot=$sysroot']
-cpp = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang++', '--sysroot=$sysroot']
+ar = '$ndk_bin_path/llvm-ar'
+c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
+cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
 cpp_ld = 'lld'
-strip = '$ndk_bin/aarch64-linux-android-strip'
+strip = '$ndk_bin_path/aarch64-linux-android-strip'
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
@@ -130,7 +112,6 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # ADICIONADO DE VOLTA: -Dbuildtype=release
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -155,6 +136,7 @@ package_driver(){
 	local build_dir="$source_dir/build"
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
+	local output_suffix="a6xx_fix"
 
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
@@ -169,54 +151,44 @@ package_driver(){
 	patchelf --set-soname "vulkan.adreno.so" lib_temp.so
 	mv lib_temp.so "vulkan.ad07XX.so"
 
-	local date_meta=$(date +'%Y-%m-%d')
+	local date_meta=$(date +'%b %d, %Y')
 	local short_hash=${commit_hash:0:7}
-    local meta_name="Turnip-anholt-${short_hash}"
-    
+	local meta_name="Turnip-Main-${short_hash}-A6xxFix"
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Branch: qcom-imgproc + A6xx Stability Fix. Commit $commit_hash",
+  "description": "Mesa Main + A6xx Stability Fix. Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-	local zip_name="turnip_anholt_$(date +'%Y%m%d')_${short_hash}.zip"
+	local zip_name="turnip_main_$(date +'%Y%m%d')_${short_hash}_${output_suffix}.zip"
 	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
-	echo -e "${green}✅ Package ready: $workdir/$zip_name${nocolor}"
+	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
 }
 
 generate_release_info() {
-    echo -e "${green}Generating release info files for GitHub Actions...${nocolor}"
+    echo -e "${green}Generating release info...${nocolor}"
     cd "$workdir"
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Turnip-anholt-${date_tag}-${short_hash}" > tag
-    echo "Turnip CI Build - ${date_tag} (anholt Fork)" > release
+    echo "Mesa-Main-A6xxFix-${date_tag}-${short_hash}" > tag
+    echo "Turnip CI Build - ${date_tag} (A6xx Fix)" > release
 
     echo "Automated Turnip CI build." > description
     echo "" >> description
-    echo "### Build Details:" >> description
-    echo "- **Repo:** anholt/mesa" >> description
-    echo "- **Branch:** \`$mesa_branch\`" >> description
-    echo "- **Fix:** A6xx Stability Fix (No Cached Memory)." >> description
-    echo "- **Build Type:** Release" >> description
-    echo "- **Commit:** $commit_hash" >> description
+    echo "**Base:** Mesa main" >> description
+    echo "**Fix:** Stability improvements for A6xx devices." >> description
+    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
 }
 
-# ===========================
-# Execução
-# ===========================
-clear
 check_deps
 prepare_ndk
 prepare_source
 compile_mesa
 package_driver
 generate_release_info
-
-echo -e "${green}🎉 Build completed successfully!${nocolor}"
