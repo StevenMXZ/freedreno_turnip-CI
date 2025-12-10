@@ -3,27 +3,17 @@ green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
 
-# ===========================
-# Turnip Triple Builder (Main, a6xx, OneUI)
-# ===========================
-
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
 mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
 
-# Variáveis globais
 commit_hash=""
 version_str=""
-date_tag=$(date +'%Y-%m-%d')
-
-# ===========================
-# Funções Auxiliares
-# ===========================
 
 check_deps(){
-	echo "🔍 Checking system dependencies ..."
+	echo "Checking system dependencies ..."
 	for dep in $deps; do
 		if ! command -v $dep >/dev/null 2>&1; then
 			echo -e "$red Missing dependency: $dep$nocolor"
@@ -39,7 +29,7 @@ check_deps(){
 }
 
 prepare_ndk(){
-	echo " Preparing Android NDK ..."
+	echo "Preparing NDK ..."
 	mkdir -p "$workdir"
 	cd "$workdir"
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
@@ -54,70 +44,48 @@ prepare_ndk(){
 	fi
 }
 
-# Função Principal de Build
-build_variant() {
-    local variant_name=$1   # Nome interno para logs/pastas (ex: Normal)
-    local zip_name=$2       # Nome EXATO do arquivo final
-    local patch_mode=$3     # Modo de patch (none, a6xx_fix, oneui_fix)
+prepare_source(){
+	echo "Preparing Mesa source..."
+	cd "$workdir"
+	if [ -d mesa ]; then rm -rf mesa; fi
+	git clone --depth=1 "$mesa_repo" mesa
+	cd mesa
 
-    echo -e "\n${green}==============================================${nocolor}"
-    echo -e "${green} Building Variant: $variant_name -> $zip_name ${nocolor}"
-    echo -e "${green}==============================================${nocolor}"
+	commit_hash=$(git rev-parse HEAD)
+	if [ -f VERSION ]; then
+	    version_str=$(cat VERSION | xargs)
+	else
+	    version_str="unknown"
+	fi
 
-    # 1. Limpar e Preparar Fonte (Garante build limpo a cada rodada)
-    cd "$workdir"
-    if [ -d mesa ]; then rm -rf mesa; fi
-    if [ -d build ]; then rm -rf build; fi
-    
-    echo "Cloning Mesa Main..."
-    git clone --depth=1 "$mesa_repo" mesa
-    cd mesa
-    
-    commit_hash=$(git rev-parse --short HEAD)
-    version_str=$(cat VERSION 2>/dev/null | xargs || echo "unknown")
+	cd "$workdir"
+}
 
-    # 2. Aplicar Patches (Baseado no modo)
-    case "$patch_mode" in
-        "a6xx_fix")
-            echo -e "${green}Applying a6xx Stability Fixes...${nocolor}"
-            if [ -f src/freedreno/vulkan/tu_query.cc ]; then
-                sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
-            fi
-            if [ -f src/freedreno/vulkan/tu_device.cc ]; then
-                sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
-            fi
-            grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
-                sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
-                sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
-            done
-            ;;
-        "oneui_fix")
-            echo -e "${green}Applying OneUI Fix (UBWC Hint)...${nocolor}"
-            if [ -f src/freedreno/common/freedreno_devices.py ]; then
-                sed -i 's/enable_tp_ubwc_flag_hint = False,/enable_tp_ubwc_flag_hint = True,/' src/freedreno/common/freedreno_devices.py
-            fi
-            ;;
-        "none")
-            echo "No patches applied (Stock Build)."
-            ;;
-    esac
+compile_mesa(){
+	echo -e "${green}Compiling Mesa...${nocolor}"
 
-    # 3. Compilar
-    echo -e "${green}--- Compiling ---${nocolor}"
+	local source_dir="$workdir/mesa"
+	local build_dir="$source_dir/build"
+	
 	local ndk_root_path
-	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then ndk_root_path="$workdir/$ndkver"; else ndk_root_path="$ANDROID_NDK_LATEST_HOME"; fi
-	local ndk_bin="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
-	local sysroot="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-	local cross_file="$workdir/android-cross.txt"
+	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
+		ndk_root_path="$workdir/$ndkver"
+	else
+		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
+	fi
 
+	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
+	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+
+	local cross_file="$source_dir/android-aarch64-crossfile.txt"
 	cat <<EOF > "$cross_file"
 [binaries]
-ar = '$ndk_bin/llvm-ar'
-c = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang', '--sysroot=$sysroot']
-cpp = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang++', '--sysroot=$sysroot']
+ar = '$ndk_bin_path/llvm-ar'
+c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
+cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
 cpp_ld = 'lld'
-strip = '$ndk_bin/aarch64-linux-android-strip'
+strip = '$ndk_bin_path/aarch64-linux-android-strip'
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
@@ -125,101 +93,89 @@ cpu = 'armv8'
 endian = 'little'
 EOF
 
-	meson setup build --cross-file "$cross_file" \
-		-Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver \
-		-Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno \
-		-Dfreedreno-kmds=kgsl -Degl=disabled -Dglx=disabled -Dshared-glapi=enabled \
-		-Db_lto=true -Dvulkan-beta=true -Ddefault_library=shared \
-		2>&1 | tee "$workdir/log_meson_$variant_name.txt"
+	cd "$source_dir"
 
-    ninja -C build 2>&1 | tee "$workdir/log_ninja_$variant_name.txt"
+	export LIBRT_LIBS=""
+	export CFLAGS="-D__ANDROID__"
+	export CXXFLAGS="-D__ANDROID__"
 
-    # 4. Empacotar
-    local lib_path="build/src/freedreno/vulkan/libvulkan_freedreno.so"
-    if [ ! -f "$lib_path" ]; then
-        echo -e "${red}Build failed for $variant_name${nocolor}"
-        return
-    fi
+	meson setup "$build_dir" --cross-file "$cross_file" \
+		-Dbuildtype=release \
+		-Dplatforms=android \
+		-Dplatform-sdk-version=$sdkver \
+		-Dandroid-stub=true \
+		-Dgallium-drivers= \
+		-Dvulkan-drivers=freedreno \
+		-Dfreedreno-kmds=kgsl \
+		-Degl=disabled \
+		-Dglx=disabled \
+		-Dshared-glapi=enabled \
+		-Db_lto=true \
+		-Dvulkan-beta=true \
+		-Ddefault_library=shared \
+		2>&1 | tee "$workdir/meson_log"
 
-    local package_temp="$workdir/temp_$variant_name"
-    mkdir -p "$package_temp"
-    cp "$lib_path" "$package_temp/libvulkan_freedreno.so"
-    
-    cd "$package_temp"
-    patchelf --set-soname "vulkan.adreno.so" libvulkan_freedreno.so
-    mv libvulkan_freedreno.so "vulkan.ad07XX.so"
+	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
+}
 
-    # Meta.json com nome interno descritivo
-    local meta_desc=""
-    case "$variant_name" in
-        "Normal") meta_desc="Standard Mesa Main build." ;;
-        "a6xx")   meta_desc="for Adreno 6xx stability." ;;
-        "OneUI")  meta_desc="Patched for OneUI compatibility." ;;
-    esac
+package_driver(){
+	local source_dir="$workdir/mesa"
+	local build_dir="$source_dir/build"
+	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
+	local package_temp="$workdir/package_temp"
 
-    cat <<EOF > meta.json
+	if [ ! -f "$lib_path" ]; then
+		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
+		exit 1
+	fi
+
+	rm -rf "$package_temp"
+	mkdir -p "$package_temp"
+	cp "$lib_path" "$package_temp/lib_temp.so"
+
+	cd "$package_temp"
+	patchelf --set-soname "vulkan.adreno.so" lib_temp.so
+	mv lib_temp.so "vulkan.ad07XX.so"
+
+	local date_meta=$(date +'%b %d, %Y')
+	local short_hash=${commit_hash:0:7}
+	local meta_name="Turnip-Main-${short_hash}"
+	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip $variant_name - $version_str",
-  "description": "$meta_desc Commit: $commit_hash",
+  "name": "$meta_name",
+  "description": "Built from Mesa main branch (Clean). Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
-    
-    echo "Zipping to $zip_name..."
-    zip -9 "$workdir/$zip_name" ./*
-    
-    rm -rf "$package_temp"
+
+	local zip_name="Turnip-Main-${short_hash}.zip"
+	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
+	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
 }
 
 generate_release_info() {
     echo -e "${green}Generating release info...${nocolor}"
     cd "$workdir"
-    
-    # Formatos de data para os nomes dos arquivos
-    # %d%m%y = 281125 (DiaMêsAno)
-    # %m%y   = 1125   (MêsAno)
-    local d_full=$(date +'%d%m%y')
-    local d_short=$(date +'%m%y')
-    
-    # Salva os nomes em variáveis para uso abaixo e para referência
-    name_normal="Turnip-${d_full}.zip"
-    name_a6xx="Turnip-a6xx-${d_short}.zip"
-    name_oneui="Turnip-OneUI-${d_short}.zip"
+    local date_tag=$(date +'%Y%m%d')
+	local short_hash=${commit_hash:0:7}
 
-    echo "Turnip-Release-${d_full}" > tag
-    echo "Turnip Drivers - $(date +'%Y-%m-%d')" > release
-    
-    echo "Automated Turnip builds from Mesa Main." > description
-    echo "Mesa Version: \`$version_str\` | Commit: \`$commit_hash\`" >> description
+    echo "Mesa-Main-${date_tag}-${short_hash}" > tag
+    echo "Turnip CI Build - ${date_tag} (Clean Main)" > release
+
+    echo "Automated Turnip CI build from the latest Mesa main branch." > description
     echo "" >> description
-    echo "### Downloads:" >> description
-    echo "1. **$name_normal**: Standard build from main branch." >> description
-    echo "2. **$name_a6xx**: fix for a6xx devices." >> description
-    echo "3. **$name_oneui**: Includes UBWC hint fix for Samsung OneUI." >> description
+    echo "### Build Details:" >> description
+    echo "**Base:** Mesa main branch" >> description
+    echo "**Patches:** None (Clean Build)" >> description
+    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
 }
 
-# ===========================
-# Execução
-# ===========================
 check_deps
 prepare_ndk
-
-# Formatos de data
-d_full=$(date +'%d%m%y') # Ex: 281125
-d_short=$(date +'%m%y')  # Ex: 1125
-
-# 1. Turnip Normal -> Turnip-281125.zip
-build_variant "Normal" "Turnip-${d_full}.zip" "none"
-
-# 2. Turnip a6xx -> Turnip-a6xx-1125.zip
-build_variant "a6xx" "Turnip-a6xx-${d_short}.zip" "a6xx_fix"
-
-# 3. Turnip OneUI -> Turnip-OneUI-1125.zip
-build_variant "OneUI" "Turnip-OneUI-${d_short}.zip" "oneui_fix"
-
+prepare_source
+compile_mesa
+package_driver
 generate_release_info
-
-echo -e "${green}🎉 All builds finished!${nocolor}"
