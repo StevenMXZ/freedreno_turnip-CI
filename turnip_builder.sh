@@ -48,21 +48,24 @@ prepare_source(){
 	echo "Preparing Mesa source..."
 	cd "$workdir"
 	if [ -d mesa ]; then rm -rf mesa; fi
-	git clone --depth=1 "$mesa_repo" mesa
+	
+	git clone "$mesa_repo" mesa
 	cd mesa
 
-	if [ -f src/freedreno/vulkan/tu_query.cc ]; then
-		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
-	fi
+	git config user.name "CI Builder"
+	git config user.email "ci@builder.com"
 
-	if [ -f src/freedreno/vulkan/tu_device.cc ]; then
-		sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
-	fi
-    
-	grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
-		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
-		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
-	done
+	git fetch origin refs/merge-requests/35610/head
+	git merge --no-edit FETCH_HEAD
+
+	git fetch origin refs/merge-requests/38808/head
+	git merge --no-edit FETCH_HEAD
+
+	git fetch origin refs/merge-requests/35894/head
+	git merge --no-edit FETCH_HEAD
+
+	git fetch origin refs/merge-requests/37802/head
+	git merge --no-edit FETCH_HEAD
 
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -136,7 +139,6 @@ package_driver(){
 	local build_dir="$source_dir/build"
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
-	local output_suffix="a6xx_fix"
 
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
@@ -153,19 +155,19 @@ package_driver(){
 
 	local date_meta=$(date +'%b %d, %Y')
 	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-Main-${short_hash}-A6xxFix"
+	local meta_name="Turnip-CustomFeatures-${short_hash}"
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Mesa Main + A6xx Stability Fix. Commit $commit_hash",
+  "description": "Mesa Main + Autotuner Overhaul + QCOM Multiview + SteamDeck Emu + Raw Copy Blits. Commit $commit_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-	local zip_name="turnip_main_$(date +'%Y%m%d')_${short_hash}_${output_suffix}.zip"
+	local zip_name="Turnip-CustomFeatures-${short_hash}.zip"
 	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
 	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
 }
@@ -176,13 +178,17 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Mesa-Main-A6xxFix-${date_tag}-${short_hash}" > tag
-    echo "Turnip CI Build - ${date_tag} (A6xx Fix)" > release
+    echo "Turnip-CustomFeatures-${date_tag}-${short_hash}" > tag
+    echo "Turnip CI Build - ${date_tag} (Custom Features)" > release
 
     echo "Automated Turnip CI build." > description
     echo "" >> description
-    echo "**Base:** Mesa main" >> description
-    echo "**Fix:** Stability improvements for A6xx devices." >> description
+    echo "**Base:** Mesa Main" >> description
+    echo "**Included Features (MRs):**" >> description
+    echo "1. Autotuner Overhaul" >> description
+    echo "2. Implement VK_QCOM_multiview_per_view_* and bin merging optimizations" >> description
+    echo "3. tu: Add DECK_EMU to advertise being a SteamDeck" >> description
+    echo "4. tu/a7xx: Use raw copy blits for buffers/images where possible" >> description
     echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
 }
 
