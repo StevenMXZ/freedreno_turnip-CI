@@ -78,13 +78,11 @@ prepare_source() {
     git config user.name "CI Builder"
     git config user.email "ci@builder.com"
 
-    git fetch origin refs/merge-requests/35610/head
-    git merge --no-edit FETCH_HEAD
+    # =========================
+    # ONLY THESE TWO MRs
+    # =========================
 
     git fetch origin refs/merge-requests/38808/head
-    git merge --no-edit FETCH_HEAD
-
-    git fetch origin refs/merge-requests/35894/head
     git merge --no-edit FETCH_HEAD
 
     git fetch origin refs/merge-requests/37802/head
@@ -177,7 +175,6 @@ package_driver() {
     cp "$lib_path" "$pkg/lib_temp.so"
 
     cd "$pkg"
-
     patchelf --set-soname "vulkan.adreno.so" lib_temp.so
     mv lib_temp.so vulkan.ad07XX.so
 
@@ -186,15 +183,15 @@ package_driver() {
     cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip-CustomFeatures-${short_hash}",
-  "description": "Mesa main + custom MRs",
+  "name": "Turnip-38808-37802-${short_hash}",
+  "description": "Mesa main + MR 38808 + MR 37802",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-    zip -9 "$workdir/Turnip-CustomFeatures-${short_hash}.zip" vulkan.ad07XX.so meta.json
+    zip -9 "$workdir/Turnip-38808-37802-${short_hash}.zip" vulkan.ad07XX.so meta.json
     echo -e "${green}Package ready.${nocolor}"
 }
 
@@ -202,14 +199,12 @@ EOF
 # Release info
 # =========================
 generate_release_info() {
-    echo "Generating release metadata..."
-
     cd "$workdir"
     local date_tag
     date_tag="$(date +'%Y%m%d')"
     local short_hash="${commit_hash:0:7}"
 
-    echo "Turnip-CustomFeatures-${date_tag}-${short_hash}" > tag
+    echo "Turnip-38808-37802-${date_tag}-${short_hash}" > tag
     echo "Turnip CI Build (${date_tag})" > release
 
     cat <<EOF > description
@@ -217,10 +212,8 @@ Automated Turnip CI build
 
 Base: Mesa main
 Included MRs:
-- Autotuner overhaul
-- VK_QCOM_multiview_per_view
-- SteamDeck emulation
-- Raw copy blits
+- MR 38808 (QCOM multiview / utils)
+- MR 37802 (SteamDeck emulation)
 
 Commit: ${commit_hash}
 EOF
