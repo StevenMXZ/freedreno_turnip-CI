@@ -58,16 +58,8 @@ prepare_source() {
     git config user.name "CI Builder"
     git config user.email "ci@builder.com"
 
-    # 1. MR 38808 (QCOM Multiview)
-    echo "Merging MR 38808..."
-    git fetch origin refs/merge-requests/38808/head
-    git merge --no-edit FETCH_HEAD || {
-        echo "Failed to merge MR 38808"
-        exit 1
-    }
-
-    # 2. MR 37802 (Shader Object / SteamDeck)
-    echo "Merging MR 37802..."
+    # MR 37802 ONLY
+    echo "Merging MR 37802 (Shader Object)..."
     git fetch origin refs/merge-requests/37802/head
     git merge --no-edit FETCH_HEAD || {
         echo "Failed to merge MR 37802"
@@ -160,14 +152,14 @@ package_driver() {
     cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip-MR38808-MR37802-${short_hash}",
-  "description": "Mesa main + MR 38808 + MR 37802 (No A6xx Fix)",
+  "name": "Turnip-MR37802-${short_hash}",
+  "description": "Mesa main + MR 37802 (Shader Object) ONLY",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
-    zip -9 "$workdir/Turnip-MR38808-MR37802-${short_hash}.zip" vulkan.ad07XX.so meta.json
+    zip -9 "$workdir/Turnip-MR37802-${short_hash}.zip" vulkan.ad07XX.so meta.json
     echo -e "${green}Package ready.${nocolor}"
 }
 
@@ -175,15 +167,14 @@ generate_release_info() {
     cd "$workdir"
     local date_tag="$(date +'%Y%m%d')"
     local short_hash="${commit_hash:0:7}"
-    echo "Turnip-Exp-${date_tag}-${short_hash}" > tag
+    echo "Turnip-MR37802-${date_tag}-${short_hash}" > tag
     echo "Turnip CI Build (${date_tag})" > release
     cat <<EOF > description
 Automated Turnip CI build
 
 Base: Mesa main
 Included MRs:
-- MR 38808 (QCOM multiview / utils)
-- MR 37802 (Shader Object / SteamDeck)
+- MR 37802 (Shader Object / SteamDeck) ONLY
 
 Note: A6xx Stability Fix is NOT applied.
 
