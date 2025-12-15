@@ -8,11 +8,8 @@ nocolor='\033[0m'
 deps="meson ninja patchelf unzip curl pip flex bison zip git ccache"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
-sdkver="35"
-
-# Configuração do Repositório Alvo
-mesa_repo="https://gitlab.freedesktop.org/PixelyIon/mesa.git"
-mesa_branch="tu-newat"
+sdkver="33"
+mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
 
 commit_hash=""
 version_str=""
@@ -55,15 +52,22 @@ prepare_source() {
     echo "Preparing Mesa source..."
     cd "$workdir"
     rm -rf mesa
-    
-    # Clona diretamente a branch específica do PixelyIon
-    echo "Cloning branch '$mesa_branch' from PixelyIon..."
-    git clone --depth=1 --branch "$mesa_branch" "$mesa_repo" mesa
-    
+    git clone --depth=1 "$mesa_repo" mesa
     cd mesa
 
-    # Nenhuma mesclagem (merge) adicional é feita aqui.
-    # Apenas o código puro da branch tu-newat.
+    if [ -f src/freedreno/vulkan/tu_query.cc ]; then
+        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
+    fi
+    if [ -f src/freedreno/vulkan/tu_query_pool.cc ]; then
+        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query_pool.cc
+    fi
+    if [ -f src/freedreno/vulkan/tu_device.cc ]; then
+        sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
+    fi
+    grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read -r file; do
+        sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
+        sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
+    done
 
     commit_hash="$(git rev-parse HEAD)"
     if [ -f VERSION ]; then
@@ -148,14 +152,14 @@ package_driver() {
     cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip-PixelyIon-${mesa_branch}-${short_hash}",
-  "description": "Direct build from PixelyIon/mesa branch ${mesa_branch}",
+  "name": "Turnip-Main-${short_hash}-A6xxFix-SDK33",
+  "description": "Mesa Main + A6xx Stability Fix (SDK 33)",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
-    zip -9 "$workdir/Turnip-PixelyIon-${mesa_branch}-${short_hash}.zip" vulkan.ad07XX.so meta.json
+    zip -9 "$workdir/Turnip-Main-${short_hash}-A6xxFix-SDK33.zip" vulkan.ad07XX.so meta.json
     echo -e "${green}Package ready.${nocolor}"
 }
 
@@ -163,16 +167,16 @@ generate_release_info() {
     cd "$workdir"
     local date_tag="$(date +'%Y%m%d')"
     local short_hash="${commit_hash:0:7}"
-    echo "Turnip-PixelyIon-${date_tag}-${short_hash}" > tag
-    echo "Turnip CI Build (${date_tag})" > release
+    echo "Turnip-SDK33-A6xx-${date_tag}-${short_hash}" > tag
+    echo "Turnip CI Build (${date_tag}) - SDK33/A6xx" > release
     cat <<EOF > description
 Automated Turnip CI build
 
-**Source:** PixelyIon/mesa
-**Branch:** ${mesa_branch}
-**Commit:** ${commit_hash}
+Base: Mesa Main
+Fix: A6xx Stability (No Cached Memory)
+SDK: 33
 
-Note: Raw build from branch, no extra patches applied.
+Commit: ${commit_hash}
 EOF
 }
 
