@@ -106,7 +106,7 @@ EOF
     meson setup "$build_dir" "$source_dir" \
         --cross-file "$cross_file" \
         -Dbuildtype=release \
-        -Dplatforms=surfaceless \
+        -Dplatforms=auto \
         -Dandroid-stub=false \
         -Dvulkan-drivers=freedreno \
         -Dfreedreno-kmds=kgsl \
