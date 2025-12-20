@@ -62,7 +62,7 @@ prepare_source() {
 
     echo "Applying A6xx safety + exposure patches..."
 
-    # ---- A6xx stability (no cached coherent memory) ----
+    # ---- A6xx stability (disable cached coherent memory) ----
     sed -i 's/has_cached_coherent_memory = true/has_cached_coherent_memory = false/' \
         src/freedreno/vulkan/tu_device.cc || true
 
@@ -70,11 +70,12 @@ prepare_source() {
         sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$f" || true
     done
 
-    # ---- FORCE Vulkan 1.3 + maintenance7/8 exposure ----
+    # ---- Force Vulkan 1.3 exposure (code-side, correct way) ----
     sed -i '
         s/device->vk.api_version = .*/device->vk.api_version = VK_API_VERSION_1_3;/
     ' src/freedreno/vulkan/tu_device.cc || true
 
+    # ---- Expose maintenance7 / maintenance8 ----
     sed -i '
         s/KHR_maintenance7 = false/KHR_maintenance7 = true/
         s/KHR_maintenance8 = false/KHR_maintenance8 = true/
@@ -112,7 +113,6 @@ EOF
         -Dbuildtype=release \
         -Dplatforms=x11,wayland \
         -Dandroid-stub=false \
-        -Dvulkan-api-version=1.3 \
         -Dvulkan-drivers=freedreno \
         -Dfreedreno-kmds=kgsl \
         -Dgallium-drivers= \
@@ -150,7 +150,7 @@ package_driver() {
     cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip-DesktopHack-${short_hash}-A6xx",
+  "name": "Turnip-A6xx-DesktopHack-${short_hash}",
   "description": "Mesa main + desktop-style exposure (A6xx)",
   "author": "custom",
   "driverVersion": "$version_str",
@@ -158,7 +158,7 @@ package_driver() {
 }
 EOF
 
-    zip -9 "$workdir/Turnip-DesktopHack-${short_hash}-A6xx.zip" \
+    zip -9 "$workdir/Turnip-A6xx-DesktopHack-${short_hash}.zip" \
         vulkan.ad06XX.so meta.json
 }
 
