@@ -70,11 +70,6 @@ prepare_source() {
         sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$f" || true
     done
 
-    # ---- Force Vulkan 1.3 exposure (code-side, correct way) ----
-    sed -i '
-        s/device->vk.api_version = .*/device->vk.api_version = VK_API_VERSION_1_3;/
-    ' src/freedreno/vulkan/tu_device.cc || true
-
     # ---- Expose maintenance7 / maintenance8 ----
     sed -i '
         s/KHR_maintenance7 = false/KHR_maintenance7 = true/
@@ -111,7 +106,7 @@ EOF
     meson setup "$build_dir" "$source_dir" \
         --cross-file "$cross_file" \
         -Dbuildtype=release \
-        -Dplatforms=x11,wayland \
+        -Dplatforms=surfaceless \
         -Dandroid-stub=false \
         -Dvulkan-drivers=freedreno \
         -Dfreedreno-kmds=kgsl \
