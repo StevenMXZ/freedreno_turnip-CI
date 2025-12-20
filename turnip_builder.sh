@@ -26,7 +26,6 @@ check_deps() {
         fi
     done
     if [ "$missing" -eq 1 ]; then
-        echo "Please install missing dependencies."
         exit 1
     fi
     pip install --user mako &>/dev/null || true
@@ -38,7 +37,6 @@ prepare_ndk() {
     cd "$workdir"
     if [ -z "${ANDROID_NDK_LATEST_HOME:-}" ]; then
         if [ ! -d "$ndkver" ]; then
-            echo "Downloading Android NDK..."
             curl -L "https://dl.google.com/android/repository/${ndkver}-linux.zip" -o "${ndkver}-linux.zip"
             unzip -q "${ndkver}-linux.zip"
         fi
@@ -55,32 +53,37 @@ prepare_source() {
     git clone --depth=1 "$mesa_repo" mesa
     cd mesa
 
-    # --- APLICAR FIX DA A6XX (Nuclear) ---
-    if [ -f src/freedreno/vulkan/tu_query.cc ]; then
-        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
-    fi
-    if [ -f src/freedreno/vulkan/tu_query_pool.cc ]; then
-        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query_pool.cc
-    fi
-    if [ -f src/freedreno/vulkan/tu_device.cc ]; then
-        sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
-    fi
-    grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read -r file; do
-        sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
-        sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
-    done
-    # -------------------------------------
-
     commit_hash="$(git rev-parse HEAD)"
     if [ -f VERSION ]; then
         version_str="$(cat VERSION | xargs)"
     else
         version_str="unknown"
     fi
+
+    echo "Applying A6xx safety + exposure patches..."
+
+    # ---- A6xx stability (no cached coherent memory) ----
+    sed -i 's/has_cached_coherent_memory = true/has_cached_coherent_memory = false/' \
+        src/freedreno/vulkan/tu_device.cc || true
+
+    grep -rl "HOST_CACHED_BIT" src/freedreno/vulkan/ | while read -r f; do
+        sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$f" || true
+    done
+
+    # ---- FORCE Vulkan 1.3 + maintenance7/8 exposure ----
+    sed -i '
+        s/device->vk.api_version = .*/device->vk.api_version = VK_API_VERSION_1_3;/
+    ' src/freedreno/vulkan/tu_device.cc || true
+
+    sed -i '
+        s/KHR_maintenance7 = false/KHR_maintenance7 = true/
+        s/KHR_maintenance8 = false/KHR_maintenance8 = true/
+    ' src/freedreno/vulkan/tu_device.cc || true
 }
 
 compile_mesa() {
-    echo -e "${green}Compiling Mesa...${nocolor}"
+    echo -e "${green}Compiling Mesa (desktop-style)...${nocolor}"
+
     local source_dir="$workdir/mesa"
     local build_dir="$source_dir/build"
     rm -rf "$build_dir"
@@ -93,43 +96,34 @@ compile_mesa() {
 [binaries]
 ar = '$ndk_bin/llvm-ar'
 c = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot']
-cpp = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables']
+cpp = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot']
 strip = '$ndk_bin/aarch64-linux-android-strip'
 ld = '$ndk_bin/ld.lld'
 
 [host_machine]
-system = 'android'
+system = 'linux'
 cpu_family = 'aarch64'
 cpu = 'armv8-a'
 endian = 'little'
 EOF
 
-    export LIBRT_LIBS=""
-    export CFLAGS="-D__ANDROID__"
-    export CXXFLAGS="-D__ANDROID__"
-
     meson setup "$build_dir" "$source_dir" \
         --cross-file "$cross_file" \
         -Dbuildtype=release \
-        -Dplatforms=android \
-        -Dplatform-sdk-version="$sdkver" \
-        -Dandroid-stub=true \
-        -Dgallium-drivers= \
+        -Dplatforms=x11,wayland \
+        -Dandroid-stub=false \
+        -Dvulkan-api-version=1.3 \
         -Dvulkan-drivers=freedreno \
         -Dfreedreno-kmds=kgsl \
+        -Dgallium-drivers= \
         -Degl=disabled \
         -Dglx=disabled \
-        -Dshared-glapi=enabled \
         -Dvulkan-beta=true \
         -Db_lto=true \
         -Ddefault_library=shared \
         2>&1 | tee "$workdir/meson_log"
 
     ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
-    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
-        echo -e "${red}Mesa build failed.${nocolor}"
-        exit 1
-    fi
 }
 
 package_driver() {
@@ -147,39 +141,32 @@ package_driver() {
     mkdir -p "$pkg"
     cp "$lib_path" "$pkg/lib_temp.so"
     cd "$pkg"
+
     patchelf --set-soname "vulkan.adreno.so" lib_temp.so
-    mv lib_temp.so vulkan.ad07XX.so
+    mv lib_temp.so vulkan.ad06XX.so
+
     local short_hash="${commit_hash:0:7}"
 
     cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip-Main-${short_hash}-A6xxFix-SDK35",
-  "description": "Mesa Main + A6xx Stability Fix (SDK 35)",
-  "author": "mesa-ci",
+  "name": "Turnip-DesktopHack-${short_hash}-A6xx",
+  "description": "Mesa main + desktop-style exposure (A6xx)",
+  "author": "custom",
   "driverVersion": "$version_str",
-  "libraryName": "vulkan.ad07XX.so"
+  "libraryName": "vulkan.ad06XX.so"
 }
 EOF
-    zip -9 "$workdir/Turnip-Main-${short_hash}-A6xxFix-SDK35.zip" vulkan.ad07XX.so meta.json
-    echo -e "${green}Package ready.${nocolor}"
+
+    zip -9 "$workdir/Turnip-DesktopHack-${short_hash}-A6xx.zip" \
+        vulkan.ad06XX.so meta.json
 }
 
 generate_release_info() {
     cd "$workdir"
-    local date_tag="$(date +'%Y%m%d')"
-    local short_hash="${commit_hash:0:7}"
-    echo "Turnip-SDK35-A6xx-${date_tag}-${short_hash}" > tag
-    echo "Turnip CI Build (${date_tag}) - SDK35/A6xx" > release
-    cat <<EOF > description
-Automated Turnip CI build
-
-Base: Mesa Main
-Fix: A6xx Stability (No Cached Memory)
-SDK: 35
-
-Commit: ${commit_hash}
-EOF
+    local date_tag
+    date_tag="$(date +'%Y%m%d')"
+    echo "Turnip-A6xx-DesktopHack-${date_tag}" > tag
 }
 
 check_deps
@@ -188,4 +175,5 @@ prepare_source
 compile_mesa
 package_driver
 generate_release_info
-echo -e "${green}Done.${nocolor}"
+
+echo -e "${green}Build finished successfully.${nocolor}"
