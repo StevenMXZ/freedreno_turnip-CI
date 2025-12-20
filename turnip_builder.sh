@@ -70,6 +70,7 @@ prepare_source() {
         sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$f" || true
     done
 
+    
     # ---- Expose maintenance7 / maintenance8 ----
     sed -i '
         s/KHR_maintenance7 = false/KHR_maintenance7 = true/
@@ -103,10 +104,13 @@ cpu = 'armv8-a'
 endian = 'little'
 EOF
 
+    # ---- DESATIVAR ANDROID STRICT ----
+    export DANDROID_STRICT=false
+
     meson setup "$build_dir" "$source_dir" \
         --cross-file "$cross_file" \
         -Dbuildtype=release \
-        -Dplatforms=auto \
+        -Dplatforms=android \
         -Dandroid-stub=false \
         -Dvulkan-drivers=freedreno \
         -Dfreedreno-kmds=kgsl \
