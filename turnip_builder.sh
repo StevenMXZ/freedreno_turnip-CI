@@ -9,7 +9,10 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git ccache"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
-mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
+
+# Repositório do Autotuner (PixelyIon)
+mesa_repo="https://gitlab.freedesktop.org/PixelyIon/mesa.git"
+mesa_branch="tu-newat"
 
 commit_hash=""
 version_str=""
@@ -49,22 +52,16 @@ prepare_ndk() {
 }
 
 prepare_source() {
-    echo "Preparing Mesa source..."
+    echo "Preparing Mesa source (Autotuner)..."
     cd "$workdir"
     rm -rf mesa
-    git clone "$mesa_repo" mesa
+    
+    echo "Cloning branch '$mesa_branch' from PixelyIon..."
+    git clone --depth=1 --branch "$mesa_branch" "$mesa_repo" mesa
     cd mesa
 
-    git config user.name "CI Builder"
-    git config user.email "ci@builder.com"
-
-    echo "Merging MR 37802 (Shader Object)..."
-    git fetch origin refs/merge-requests/37802/head
-    git merge --no-edit FETCH_HEAD || {
-        echo "Failed to merge MR 37802"
-        exit 1
-    }
-
+    # Sem patches manuais, build direto da branch
+    
     commit_hash="$(git rev-parse HEAD)"
     if [ -f VERSION ]; then
         version_str="$(cat VERSION | xargs)"
@@ -148,14 +145,14 @@ package_driver() {
     cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip-MR37802-${short_hash}",
-  "description": "Mesa main + MR 37802 (Shader Object). SDK 35.",
+  "name": "Turnip-PixelyIon-Autotuner-${short_hash}",
+  "description": "PixelyIon branch tu-newat (Autotuner Overhaul). SDK 35.",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
-    zip -9 "$workdir/Turnip-MR37802-${short_hash}.zip" vulkan.ad07XX.so meta.json
+    zip -9 "$workdir/Turnip-PixelyIon-Autotuner-${short_hash}.zip" vulkan.ad07XX.so meta.json
     echo -e "${green}Package ready.${nocolor}"
 }
 
@@ -163,17 +160,14 @@ generate_release_info() {
     cd "$workdir"
     local date_tag="$(date +'%Y%m%d')"
     local short_hash="${commit_hash:0:7}"
-    echo "Turnip-MR37802-${date_tag}-${short_hash}" > tag
+    echo "Turnip-Autotuner-${date_tag}-${short_hash}" > tag
     echo "Turnip CI Build (${date_tag})" > release
     cat <<EOF > description
 Automated Turnip CI build
 
-Base: Mesa Main
-Included MRs:
-- MR 37802 (Shader Object / SteamDeck)
-
-SDK: 35
-Note: No A6xx specific fixes applied.
+**Source:** PixelyIon/mesa
+**Branch:** tu-newat (Autotuner Overhaul)
+**SDK:** 35
 
 Commit: ${commit_hash}
 EOF
