@@ -1,48 +1,100 @@
-name: Build Turnip (Dual Variant)
+name: Turnip Bisect Build
 
 on:
   workflow_dispatch:
-  schedule:
-  - cron: "20 5 1,15 * *"
+    inputs:
+      commit_sha:
+        description: 'Commit SHA to Build (Hash)'
+        required: true
+        type: string
 
 jobs:
-  build_and_release:
-    name: Build and Release
-    runs-on: ubuntu-24.04
+  build-turnip:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Necessário para criar a Release/Tag
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout Specific Commit
+        uses: actions/checkout@v4
+        with:
+          repository: https://gitlab.freedesktop.org/mesa/mesa.git
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 1
 
-    - name: Prepare environment
-      run: |
-        sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
-        sudo apt update
-        sudo apt build-dep mesa -y
-        sudo apt install -y ccache python3-pip
-        pip install --upgrade meson ninja
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build patchelf flex bison python3-mako python3-pip
 
-    - name: Execute build script
-      run: bash ./turnip_builder.sh
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b # Versão estável para CI
 
-    - name: Upload Logs
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-logs
-        path: turnip_workdir/log_*.txt
-        if-no-files-found: ignore
+      - name: Create Crossfile
+        run: |
+          echo "[binaries]" > android-cross.txt
+          echo "c = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang'" >> android-cross.txt
+          echo "cpp = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang++'" >> android-cross.txt
+          echo "ar = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'" >> android-cross.txt
+          echo "strip = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'" >> android-cross.txt
+          echo "pkgconfig = '/usr/bin/pkg-config'" >> android-cross.txt
+          echo "[host_machine]" >> android-cross.txt
+          echo "system = 'android'" >> android-cross.txt
+          echo "cpu_family = 'aarch64'" >> android-cross.txt
+          echo "cpu = 'armv8'" >> android-cross.txt
+          echo "endian = 'little'" >> android-cross.txt
 
-    - id: get_info
-      name: "Get release info"
-      run: |
-        echo "RELEASE_NAME=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
-        echo "TAG_NAME=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
-        echo "BODY_PATH=turnip_workdir/description" >> "$GITHUB_OUTPUT"
+      - name: Build Turnip
+        run: |
+          # SDK 35 e Flags padrão (Sem fix A6xx, pois estamos testando regressão pura)
+          meson setup build \
+            --cross-file android-cross.txt \
+            -Dbuildtype=release \
+            -Dplatforms=android \
+            -Dplatform-sdk-version=35 \
+            -Dandroid-stub=true \
+            -Dgallium-drivers= \
+            -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=kgsl \
+            -Degl=disabled \
+            -Dglx=disabled \
+            -Dshared-glapi=enabled \
+            -Dvulkan-beta=true \
+            -Db_lto=true \
+            -Ddefault_library=shared
 
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      with:
-        body_path: ${{ steps.get_info.outputs.BODY_PATH }}
-        name: ${{ steps.get_info.outputs.RELEASE_NAME }}
-        tag_name: ${{ steps.get_info.outputs.TAG_NAME }}
-        files: turnip_workdir/*.zip
-        draft: false
+          ninja -C build
+
+      - name: Package Driver
+        run: |
+          mkdir -p package
+          cp build/src/freedreno/vulkan/libvulkan_freedreno.so package/vulkan.ad07XX.so
+          
+          # Patch Soname
+          patchelf --set-soname "vulkan.adreno.so" package/vulkan.ad07XX.so
+          
+          # Criar meta.json
+          echo '{
+            "schemaVersion": 1,
+            "name": "Turnip-Bisect-${{ inputs.commit_sha }}",
+            "description": "Bisect Build. Commit: ${{ inputs.commit_sha }}",
+            "author": "CI",
+            "libraryName": "vulkan.ad07XX.so"
+          }' > package/meta.json
+
+          cd package
+          zip -9 ../Turnip-Bisect-${{ inputs.commit_sha }}.zip *
+
+      # AQUI ESTÁ A CORREÇÃO DO ERRO
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: bisect-${{ inputs.commit_sha }} # Cria uma tag forçada
+          name: Bisect Build - ${{ inputs.commit_sha }}
+          body: |
+            Automated Bisect Build.
+            Commit testado: ${{ inputs.commit_sha }}
+          files: Turnip-Bisect-${{ inputs.commit_sha }}.zip
+          make_latest: false
