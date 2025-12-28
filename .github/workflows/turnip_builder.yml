@@ -17,6 +17,7 @@ jobs:
         run: |
           sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update
+          sudo apt-get install -y meson ninja-build patchelf flex bison python3-mako python3-pip zip ccache
           sudo apt-get build-dep mesa -y
           pip install --upgrade meson ninja
 
