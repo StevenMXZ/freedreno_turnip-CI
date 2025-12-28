@@ -48,20 +48,32 @@ prepare_source(){
 	echo "Preparing Mesa source..."
 	cd "$workdir"
 	if [ -d mesa ]; then rm -rf mesa; fi
-	git clone --depth=1 "$mesa_repo" mesa
+	git clone "$mesa_repo" mesa
 	cd mesa
+    
+    # Configuração git para merge
+    git config user.name "CI Builder"
+    git config user.email "ci@builder.com"
 
-    # --- FIX ADICIONADO: BGRA (Unity / Winlator Colors) ---
+    # --- MERGE: MR 37802 (Autotuner Overhaul) ---
+    echo -e "${green}Merging MR 37802 (Autotuner Overhaul)...${nocolor}"
+    git fetch origin refs/merge-requests/37802/head
+    git merge --no-edit FETCH_HEAD || {
+        echo -e "${red}Failed to merge MR 37802.${nocolor}"
+        exit 1
+    }
+    # --------------------------------------------
+
+    # --- FIX: BGRA (Unity / Winlator Colors) ---
     echo "Applying BGRA Fix (Unity)..."
     local vk_android="src/vulkan/runtime/vk_android.c"
     if [ -f "$vk_android" ]; then
-        # Remove suporte a BGRA do Android para evitar erro de cor na Unity
         sed -i '/case AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM:/,+1d' "$vk_android"
         sed -i '/case VK_FORMAT_B8G8R8A8_UNORM:/,+1d' "$vk_android"
     fi
-    # ------------------------------------------------------
 
-    # --- A6XX FIX (JÁ EXISTIA NO SEU SCRIPT) ---
+    # --- FIX: A6XX (Stability / Nuclear) ---
+    echo "Applying A6xx Stability Fix..."
 	if [ -f src/freedreno/vulkan/tu_query.cc ]; then
 		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
 	fi
@@ -74,7 +86,6 @@ prepare_source(){
 		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
 		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
 	done
-    # -------------------------------------------
 
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -148,8 +159,10 @@ package_driver(){
 	local build_dir="$source_dir/build"
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
-	local output_suffix="SDK35_BGRA_A6xx"
-
+	
+    # Nome limpo (lowercase)
+    local lib_name="vulkan.ad07xx.so"
+    
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
 		exit 1
@@ -160,25 +173,28 @@ package_driver(){
 	cp "$lib_path" "$package_temp/lib_temp.so"
 
 	cd "$package_temp"
-	patchelf --set-soname "vulkan.adreno.so" lib_temp.so
-	mv lib_temp.so "vulkan.ad07XX.so"
+	patchelf --set-soname "$lib_name" lib_temp.so
+	mv lib_temp.so "$lib_name"
 
-	local date_meta=$(date +'%b %d, %Y')
 	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-Main-${short_hash}-BGRA-A6xx"
+    
+    # JSON LIMPO (Conforme solicitado)
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "$meta_name",
-  "description": "Mesa Main + A6xx Fix + BGRA Fix. Commit $commit_hash",
+  "name": "Mesa Turnip Driver v26.0.0 (Autotuner)",
+  "description": "Main + MR37802 + UnityFix + A6xxFix. Commit $short_hash",
   "author": "mesa-ci",
-  "driverVersion": "$version_str",
-  "libraryName": "vulkan.ad07XX.so"
+  "packageVersion": "1",
+  "vendor": "Mesa",
+  "driverVersion": "Vulkan $version_str",
+  "minApi": 27,
+  "libraryName": "$lib_name"
 }
 EOF
 
-	local zip_name="turnip_main_$(date +'%Y%m%d')_${short_hash}_${output_suffix}.zip"
-	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
+	local zip_name="Turnip_Autotuner_$(date +'%Y%m%d')_${short_hash}.zip"
+	zip -9 "$workdir/$zip_name" "$lib_name" meta.json
 	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
 }
 
@@ -188,15 +204,15 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Mesa-Main-BGRA-A6xx-${date_tag}-${short_hash}" > tag
-    echo "Turnip CI Build - ${date_tag} (BGRA + A6xx Fixes)" > release
+    echo "Turnip-Autotuner-${date_tag}-${short_hash}" > tag
+    echo "Turnip CI Build - ${date_tag}" > release
 
     echo "Automated Turnip CI build." > description
     echo "" >> description
-    echo "**Base:** Mesa main" >> description
-    echo "**Fixes:**" >> description
-    echo "* BGRA Support Reverted (Unity Colors)" >> description
-    echo "* A6xx Stability (Nuclear)" >> description
+    echo "**Features:**" >> description
+    echo "* Autotuner Overhaul (MR !37802)" >> description
+    echo "* BGRA Fix (Unity Colors)" >> description
+    echo "* A6xx Stability Fix" >> description
     echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
 }
 
