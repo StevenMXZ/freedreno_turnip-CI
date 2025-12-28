@@ -1,18 +1,19 @@
-name: Turnip Bisect Build
+name: Turnip Bisect (Pre-Unified Test)
 
 on:
   workflow_dispatch:
     inputs:
       commit_sha:
-        description: 'Commit SHA to Build (Hash)'
+        description: 'Commit SHA (Padrão: Pre-Unified)'
         required: true
+        default: '79656dbcd30'
         type: string
 
 jobs:
   build-turnip:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # Necessário para criar a Release/Tag
+      contents: write  # Necessário para criar a Release/Tag automaticamente
 
     steps:
       - name: Checkout Specific Commit
@@ -25,14 +26,14 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson ninja-build patchelf flex bison python3-mako python3-pip
+          sudo apt-get install -y meson ninja-build patchelf flex bison python3-mako python3-pip zip
 
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r26b # Versão estável para CI
+          ndk-version: r27 # Versão estável que suporta SDK 35
 
-      - name: Create Crossfile
+      - name: Create Crossfile (SDK 35)
         run: |
           echo "[binaries]" > android-cross.txt
           echo "c = '$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang'" >> android-cross.txt
@@ -46,9 +47,9 @@ jobs:
           echo "cpu = 'armv8'" >> android-cross.txt
           echo "endian = 'little'" >> android-cross.txt
 
-      - name: Build Turnip
+      - name: Build Turnip (No Patches)
         run: |
-          # SDK 35 e Flags padrão (Sem fix A6xx, pois estamos testando regressão pura)
+          # SDK 35, Release, Sem Fix A6xx
           meson setup build \
             --cross-file android-cross.txt \
             -Dbuildtype=release \
@@ -78,23 +79,23 @@ jobs:
           # Criar meta.json
           echo '{
             "schemaVersion": 1,
-            "name": "Turnip-Bisect-${{ inputs.commit_sha }}",
-            "description": "Bisect Build. Commit: ${{ inputs.commit_sha }}",
+            "name": "Turnip-Test-${{ inputs.commit_sha }}",
+            "description": "Bisect Test (Pre-Unified). Commit: ${{ inputs.commit_sha }}",
             "author": "CI",
             "libraryName": "vulkan.ad07XX.so"
           }' > package/meta.json
 
           cd package
-          zip -9 ../Turnip-Bisect-${{ inputs.commit_sha }}.zip *
+          zip -9 ../Turnip-Test-${{ inputs.commit_sha }}.zip *
 
-      # AQUI ESTÁ A CORREÇÃO DO ERRO
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: bisect-${{ inputs.commit_sha }} # Cria uma tag forçada
-          name: Bisect Build - ${{ inputs.commit_sha }}
+          tag_name: bisect-${{ inputs.commit_sha }} # Resolve o erro "requires a tag"
+          name: Bisect Test - ${{ inputs.commit_sha }}
           body: |
-            Automated Bisect Build.
-            Commit testado: ${{ inputs.commit_sha }}
-          files: Turnip-Bisect-${{ inputs.commit_sha }}.zip
+            Build de teste de regressão.
+            Commit: ${{ inputs.commit_sha }}
+            SDK: 35
+          files: Turnip-Test-${{ inputs.commit_sha }}.zip
           make_latest: false
