@@ -49,57 +49,16 @@ prepare_ndk() {
 }
 
 prepare_source() {
-    echo "Preparing Mesa source..."
+    echo "Preparing Mesa source (Vanilla/Puro)..."
     cd "$workdir"
     rm -rf mesa
     
-    # 1. Clona Mesa Main
-    git clone "$mesa_repo" mesa
+    # Clona o Mesa Main (apenas o último commit)
+    git clone --depth=1 "$mesa_repo" mesa
     cd mesa
 
-    git config user.name "CI Builder"
-    git config user.email "ci@builder.com"
-
-    # 2. MERGE MR 37802 (Autotuner Overhaul)
-    echo -e "${green}Merging MR 37802 (Autotuner Overhaul)...${nocolor}"
-    git fetch origin refs/merge-requests/37802/head
-    git merge --no-edit FETCH_HEAD || {
-        echo -e "${red}Failed to merge MR 37802. Conflicts likely.${nocolor}"
-        exit 1
-    }
-
-    # 3. PATCH: REMOVER SUPORTE A BGRA (Revert BGRA - Fix Unity)
-    echo -e "${green}Applying Patch: Removing BGRA support from vk_android.c...${nocolor}"
-    local vk_android="src/vulkan/runtime/vk_android.c"
-    if [ -f "$vk_android" ]; then
-        sed -i '/case AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM:/,+1d' "$vk_android"
-        sed -i '/case VK_FORMAT_B8G8R8A8_UNORM:/,+1d' "$vk_android"
-    else
-        echo -e "${red}Critical: vk_android.c not found!${nocolor}"
-        exit 1
-    fi
-
-    # 4. PATCH: FIX A6XX (Stability / No Cache)
-    echo -e "${green}Applying A6xx Stability Fix (Nuclear)...${nocolor}"
-    
-    # Remove cache de queries
-    if [ -f src/freedreno/vulkan/tu_query.cc ]; then
-        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
-    fi
-    if [ -f src/freedreno/vulkan/tu_query_pool.cc ]; then
-        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query_pool.cc
-    fi
-    
-    # Força has_cached_coherent_memory = false
-    if [ -f src/freedreno/vulkan/tu_device.cc ]; then
-        sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
-    fi
-    
-    # Remove a flag CACHED_BIT de todo o código vulkan
-    grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read -r file; do
-        sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
-        sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
-    done
+    # NENHUM PATCH APLICADO AQUI
+    # O código será compilado exatamente como está no upstream.
 
     commit_hash="$(git rev-parse HEAD)"
     if [ -f VERSION ]; then
@@ -110,7 +69,7 @@ prepare_source() {
 }
 
 compile_mesa() {
-    echo -e "${green}Compiling Mesa...${nocolor}"
+    echo -e "${green}Compiling Mesa (SDK $sdkver)...${nocolor}"
     local source_dir="$workdir/mesa"
     local build_dir="$source_dir/build"
     rm -rf "$build_dir"
@@ -150,7 +109,7 @@ EOF
         -Degl=disabled \
         -Dglx=disabled \
         -Dshared-glapi=enabled \
-        -Dvulkan-beta=false \
+        -Dvulkan-beta=true \
         -Db_lto=true \
         -Ddefault_library=shared \
         2>&1 | tee "$workdir/meson_log"
@@ -177,41 +136,36 @@ package_driver() {
     mkdir -p "$pkg"
     cp "$lib_path" "$pkg/lib_temp.so"
     cd "$pkg"
-    
-    # Importante: Definir o Soname corretamente para vulkan.adreno.so
-    # Isso ajuda o driver a ser carregado corretamente e evitar o fallback para 1.3.121
     patchelf --set-soname "vulkan.adreno.so" lib_temp.so
     mv lib_temp.so vulkan.ad07XX.so
-    
     local short_hash="${commit_hash:0:7}"
 
     cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip-SuperFix-${short_hash}",
-  "description": "Main + MR37802 + NoBGRA + A6xxFix. SDK 35.",
+  "name": "Turnip-Vanilla-Main-${short_hash}",
+  "description": "Mesa Main Vanilla (No Patches). SDK 35.",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
-    zip -9 "$workdir/Turnip-SuperFix-${short_hash}.zip" vulkan.ad07XX.so meta.json
-    echo -e "${green}Package ready: Turnip-SuperFix-${short_hash}.zip${nocolor}"
+    zip -9 "$workdir/Turnip-Vanilla-Main-${short_hash}.zip" vulkan.ad07XX.so meta.json
+    echo -e "${green}Package ready: Turnip-Vanilla-Main-${short_hash}.zip${nocolor}"
 }
 
 generate_release_info() {
     cd "$workdir"
     local date_tag="$(date +'%Y%m%d')"
     local short_hash="${commit_hash:0:7}"
-    echo "Turnip-SuperFix-${date_tag}-${short_hash}" > tag
+    echo "Turnip-Vanilla-${date_tag}-${short_hash}" > tag
     echo "Turnip CI Build (${date_tag})" > release
     cat <<EOF > description
 Automated Turnip CI build
 
+**Type:** Vanilla (No Patches)
 **Base:** Mesa Main
-**Merge:** MR !37802 (Autotuner Overhaul)
-**Fix 1:** Revert BGRA Support (vk_android.c)
-**Fix 2:** A6xx Stability (No Cache)
+**SDK:** 35
 
 Commit: ${commit_hash}
 EOF
