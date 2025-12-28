@@ -12,7 +12,6 @@ sdkver="35"
 mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
 
 commit_hash=""
-version_str=""
 
 check_deps() {
     echo "Checking system dependencies ..."
@@ -49,42 +48,32 @@ prepare_ndk() {
 }
 
 prepare_source() {
-    echo "Preparing Mesa source (Vanilla/Puro)..."
+    echo "Preparing Mesa source (Vanilla)..."
     cd "$workdir"
     rm -rf mesa
     
-    # Clona o Mesa Main (apenas o último commit)
+    # Clone Limpo
     git clone --depth=1 "$mesa_repo" mesa
     cd mesa
 
-    # NENHUM PATCH APLICADO AQUI
-    # O código será compilado exatamente como está no upstream.
-
     commit_hash="$(git rev-parse HEAD)"
-    if [ -f VERSION ]; then
-        version_str="$(cat VERSION | xargs)"
-    else
-        version_str="unknown"
-    fi
 }
 
-compile_mesa() {
-    echo -e "${green}Compiling Mesa (SDK $sdkver)...${nocolor}"
-    local source_dir="$workdir/mesa"
-    local build_dir="$source_dir/build"
-    rm -rf "$build_dir"
-
+generate_crossfile() {
+    echo "Generating Crossfile..."
     local ndk_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
     local ndk_sysroot="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-    local cross_file="$source_dir/android-aarch64-crossfile.txt"
+    local cross_file="$workdir/mesa/android-aarch64"
 
+    # Nota: Adicionei static-libstdc++ aqui para garantir que o driver carregue.
+    # Sem isso, ele falha ao procurar simbolos e o Android carrega o driver antigo do sistema.
     cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin/llvm-ar'
 c = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot']
-cpp = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables']
+cpp = ['ccache', '$ndk_bin/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-static-libstdc++']
 strip = '$ndk_bin/aarch64-linux-android-strip'
-ld = '$ndk_bin/ld.lld'
+pkgconfig = '/usr/bin/pkg-config'
 
 [host_machine]
 system = 'android'
@@ -92,29 +81,33 @@ cpu_family = 'aarch64'
 cpu = 'armv8-a'
 endian = 'little'
 EOF
+}
 
-    export LIBRT_LIBS=""
-    export CFLAGS="-D__ANDROID__"
-    export CXXFLAGS="-D__ANDROID__"
+compile_mesa() {
+    echo -e "${green}Compiling Mesa (Custom Command)...${nocolor}"
+    cd "$workdir/mesa"
+    rm -rf build-android-aarch64
 
-    meson setup "$build_dir" "$source_dir" \
-        --cross-file "$cross_file" \
-        -Dbuildtype=release \
+    # COMANDO EXATO QUE VOCÊ PEDIU
+    # Observação: buildtype=release não estava no seu comando, então o meson vai usar debugoptimized por padrão.
+    # Se quiser release, adicione -Dbuildtype=release
+    
+    meson setup build-android-aarch64 \
+        --cross-file "$workdir/mesa/android-aarch64" \
         -Dplatforms=android \
-        -Dplatform-sdk-version="$sdkver" \
+        -Dplatform-sdk-version=$sdkver \
         -Dandroid-stub=true \
         -Dgallium-drivers= \
         -Dvulkan-drivers=freedreno \
-        -Dfreedreno-kmds=kgsl \
-        -Degl=disabled \
-        -Dglx=disabled \
-        -Dshared-glapi=enabled \
         -Dvulkan-beta=true \
+        -Dfreedreno-kmds=kgsl \
         -Db_lto=true \
-        -Ddefault_library=shared \
+        -Dstrip=true \
+        -Degl=disabled \
         2>&1 | tee "$workdir/meson_log"
 
-    ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
+    ninja -C build-android-aarch64 2>&1 | tee "$workdir/ninja_log"
+    
     if [ "${PIPESTATUS[0]}" -ne 0 ]; then
         echo -e "${red}Mesa build failed.${nocolor}"
         exit 1
@@ -123,7 +116,7 @@ EOF
 
 package_driver() {
     echo "Packaging driver..."
-    local build_dir="$workdir/mesa/build"
+    local build_dir="$workdir/mesa/build-android-aarch64"
     local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
     local pkg="$workdir/package_temp"
 
@@ -134,47 +127,39 @@ package_driver() {
 
     rm -rf "$pkg"
     mkdir -p "$pkg"
-    cp "$lib_path" "$pkg/lib_temp.so"
+    
+    # Renomeando para lowercase conforme o JSON pede
+    cp "$lib_path" "$pkg/vulkan.ad07xx.so"
+    
     cd "$pkg"
-    patchelf --set-soname "vulkan.adreno.so" lib_temp.so
-    mv lib_temp.so vulkan.ad07XX.so
+    
+    # Ajustando o SONAME para bater com o nome do arquivo e o JSON
+    patchelf --set-soname "vulkan.ad07xx.so" vulkan.ad07xx.so
+    
     local short_hash="${commit_hash:0:7}"
 
+    # SEU JSON EXATO
     cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip-Vanilla-Main-${short_hash}",
-  "description": "Mesa Main Vanilla (No Patches). SDK 35.",
-  "author": "mesa-ci",
-  "driverVersion": "$version_str",
-  "libraryName": "vulkan.ad07XX.so"
+  "name": "Mesa Turnip Driver v26.0.0 Revision",
+  "description": "Compiled from source.",
+  "author": "me",
+  "packageVersion": "1",
+  "vendor": "Mesa",
+  "driverVersion": "Vulkan 1.4.335",
+  "minApi": 27,
+  "libraryName": "vulkan.ad07xx.so"
 }
 EOF
-    zip -9 "$workdir/Turnip-Vanilla-Main-${short_hash}.zip" vulkan.ad07XX.so meta.json
-    echo -e "${green}Package ready: Turnip-Vanilla-Main-${short_hash}.zip${nocolor}"
-}
-
-generate_release_info() {
-    cd "$workdir"
-    local date_tag="$(date +'%Y%m%d')"
-    local short_hash="${commit_hash:0:7}"
-    echo "Turnip-Vanilla-${date_tag}-${short_hash}" > tag
-    echo "Turnip CI Build (${date_tag})" > release
-    cat <<EOF > description
-Automated Turnip CI build
-
-**Type:** Vanilla (No Patches)
-**Base:** Mesa Main
-**SDK:** 35
-
-Commit: ${commit_hash}
-EOF
+    zip -9 "$workdir/Turnip-CustomJSON-${short_hash}.zip" vulkan.ad07xx.so meta.json
+    echo -e "${green}Package ready: Turnip-CustomJSON-${short_hash}.zip${nocolor}"
 }
 
 check_deps
 prepare_ndk
 prepare_source
+generate_crossfile
 compile_mesa
 package_driver
-generate_release_info
 echo -e "${green}Done.${nocolor}"
