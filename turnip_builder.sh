@@ -5,7 +5,6 @@ green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
 
-# Dependências (ccache é opcional, mas recomendado)
 deps="meson ninja patchelf unzip curl pip flex bison zip git ccache"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
@@ -54,35 +53,53 @@ prepare_source() {
     cd "$workdir"
     rm -rf mesa
     
-    # Clona o Mesa Main
-    git clone --depth=1 "$mesa_repo" mesa
+    # 1. Clona Mesa Main
+    git clone "$mesa_repo" mesa
     cd mesa
 
-    # ========================================================
-    # PATCH: REMOVER SUPORTE A BGRA (Revert BGRA)
-    # ========================================================
+    git config user.name "CI Builder"
+    git config user.email "ci@builder.com"
+
+    # 2. MERGE MR 37802 (Autotuner Overhaul)
+    echo -e "${green}Merging MR 37802 (Autotuner Overhaul)...${nocolor}"
+    git fetch origin refs/merge-requests/37802/head
+    git merge --no-edit FETCH_HEAD || {
+        echo -e "${red}Failed to merge MR 37802. Conflicts likely.${nocolor}"
+        exit 1
+    }
+
+    # 3. PATCH: REMOVER SUPORTE A BGRA (Revert BGRA - Fix Unity)
     echo -e "${green}Applying Patch: Removing BGRA support from vk_android.c...${nocolor}"
-    
-    local target_file="src/vulkan/runtime/vk_android.c"
-
-    if [ -f "$target_file" ]; then
-        # 1. Remove o case AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM e a linha seguinte (return)
-        sed -i '/case AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM:/,+1d' "$target_file"
-
-        # 2. Remove o case VK_FORMAT_B8G8R8A8_UNORM e a linha seguinte (return)
-        sed -i '/case VK_FORMAT_B8G8R8A8_UNORM:/,+1d' "$target_file"
-        
-        # Verificação simples
-        if grep -q "B8G8R8A8" "$target_file"; then
-            echo -e "${red}AVISO: O patch pode ter falhado, ainda encontrei referências a B8G8R8A8.${nocolor}"
-        else
-            echo -e "${green}Patch aplicado com sucesso! BGRA removido.${nocolor}"
-        fi
+    local vk_android="src/vulkan/runtime/vk_android.c"
+    if [ -f "$vk_android" ]; then
+        sed -i '/case AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM:/,+1d' "$vk_android"
+        sed -i '/case VK_FORMAT_B8G8R8A8_UNORM:/,+1d' "$vk_android"
     else
-        echo -e "${red}ERRO: Arquivo $target_file não encontrado! O layout do Mesa mudou?${nocolor}"
+        echo -e "${red}Critical: vk_android.c not found!${nocolor}"
         exit 1
     fi
-    # ========================================================
+
+    # 4. PATCH: FIX A6XX (Stability / No Cache)
+    echo -e "${green}Applying A6xx Stability Fix (Nuclear)...${nocolor}"
+    
+    # Remove cache de queries
+    if [ -f src/freedreno/vulkan/tu_query.cc ]; then
+        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
+    fi
+    if [ -f src/freedreno/vulkan/tu_query_pool.cc ]; then
+        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query_pool.cc
+    fi
+    
+    # Força has_cached_coherent_memory = false
+    if [ -f src/freedreno/vulkan/tu_device.cc ]; then
+        sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
+    fi
+    
+    # Remove a flag CACHED_BIT de todo o código vulkan
+    grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read -r file; do
+        sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
+        sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
+    done
 
     commit_hash="$(git rev-parse HEAD)"
     if [ -f VERSION ]; then
@@ -93,7 +110,7 @@ prepare_source() {
 }
 
 compile_mesa() {
-    echo -e "${green}Compiling Mesa (Main - No BGRA)...${nocolor}"
+    echo -e "${green}Compiling Mesa...${nocolor}"
     local source_dir="$workdir/mesa"
     local build_dir="$source_dir/build"
     rm -rf "$build_dir"
@@ -133,7 +150,7 @@ EOF
         -Degl=disabled \
         -Dglx=disabled \
         -Dshared-glapi=enabled \
-        -Dvulkan-beta=true \
+        -Dvulkan-beta=false \
         -Db_lto=true \
         -Ddefault_library=shared \
         2>&1 | tee "$workdir/meson_log"
@@ -160,36 +177,41 @@ package_driver() {
     mkdir -p "$pkg"
     cp "$lib_path" "$pkg/lib_temp.so"
     cd "$pkg"
+    
+    # Importante: Definir o Soname corretamente para vulkan.adreno.so
+    # Isso ajuda o driver a ser carregado corretamente e evitar o fallback para 1.3.121
     patchelf --set-soname "vulkan.adreno.so" lib_temp.so
     mv lib_temp.so vulkan.ad07XX.so
+    
     local short_hash="${commit_hash:0:7}"
 
     cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip-Main-NoBGRA-${short_hash}",
-  "description": "Mesa Main with BGRA support forcefully reverted in vk_android.c",
+  "name": "Turnip-SuperFix-${short_hash}",
+  "description": "Main + MR37802 + NoBGRA + A6xxFix. SDK 35.",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
-    zip -9 "$workdir/Turnip-Main-NoBGRA-${short_hash}.zip" vulkan.ad07XX.so meta.json
-    echo -e "${green}Package ready.${nocolor}"
+    zip -9 "$workdir/Turnip-SuperFix-${short_hash}.zip" vulkan.ad07XX.so meta.json
+    echo -e "${green}Package ready: Turnip-SuperFix-${short_hash}.zip${nocolor}"
 }
 
 generate_release_info() {
     cd "$workdir"
     local date_tag="$(date +'%Y%m%d')"
     local short_hash="${commit_hash:0:7}"
-    echo "Turnip-NoBGRA-${date_tag}-${short_hash}" > tag
+    echo "Turnip-SuperFix-${date_tag}-${short_hash}" > tag
     echo "Turnip CI Build (${date_tag})" > release
     cat <<EOF > description
 Automated Turnip CI build
 
 **Base:** Mesa Main
-**Patch:** Removed AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM from vk_android.c
-**SDK:** 35
+**Merge:** MR !37802 (Autotuner Overhaul)
+**Fix 1:** Revert BGRA Support (vk_android.c)
+**Fix 2:** A6xx Stability (No Cache)
 
 Commit: ${commit_hash}
 EOF
