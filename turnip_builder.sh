@@ -65,7 +65,6 @@ generate_crossfile() {
     local ndk_sysroot="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
     local cross_file="$workdir/mesa/android-aarch64"
 
-    # Mantendo o static-libstdc++ para evitar problemas de linkagem
     cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin/llvm-ar'
@@ -83,12 +82,11 @@ EOF
 }
 
 compile_mesa() {
-    echo -e "${green}Compiling Mesa (Custom Command)...${nocolor}"
+    echo -e "${green}Compiling Mesa (Custom Command + Fixes)...${nocolor}"
     cd "$workdir/mesa"
     rm -rf build-android-aarch64
 
-    # CORREÇÃO AQUI:
-    # Adicionadas flags para desativar dependências do libarchive que não existem no Android (OpenSSL, etc)
+    # CORREÇÃO: Adicionado -Dvalgrind=disabled e mantido os fixes do libarchive
     meson setup build-android-aarch64 \
         --cross-file "$workdir/mesa/android-aarch64" \
         -Dplatforms=android \
@@ -101,6 +99,7 @@ compile_mesa() {
         -Db_lto=true \
         -Dstrip=true \
         -Degl=disabled \
+        -Dvalgrind=disabled \
         -Dlibarchive:openssl=disabled \
         -Dlibarchive:nettle=disabled \
         -Dlibarchive:expat=disabled \
@@ -131,12 +130,9 @@ package_driver() {
     rm -rf "$pkg"
     mkdir -p "$pkg"
     
-    # Renomeando para lowercase conforme o JSON pede
+    # Renomeando e ajustando Soname
     cp "$lib_path" "$pkg/vulkan.ad07xx.so"
-    
     cd "$pkg"
-    
-    # Ajustando o SONAME
     patchelf --set-soname "vulkan.ad07xx.so" vulkan.ad07xx.so
     
     local short_hash="${commit_hash:0:7}"
