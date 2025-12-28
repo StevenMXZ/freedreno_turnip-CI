@@ -5,13 +5,7 @@ green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
 
-# =========================
-# CONFIGURAÇÃO DO TESTE
-# =========================
-# Commit: rusticl: implement cl_khr_priority_hints
-# (Imediatamente antes do tu: Implement VK_KHR_unified_image_layouts)
-commit_target="79656dbcd30"
-
+# Dependências (ccache é opcional, mas recomendado)
 deps="meson ninja patchelf unzip curl pip flex bison zip git ccache"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
@@ -60,15 +54,35 @@ prepare_source() {
     cd "$workdir"
     rm -rf mesa
     
-    echo "Cloning Mesa..."
-    git clone "$mesa_repo" mesa
+    # Clona o Mesa Main
+    git clone --depth=1 "$mesa_repo" mesa
     cd mesa
 
-    echo -e "${green}Checking out target commit: $commit_target${nocolor}"
-    git checkout "$commit_target"
+    # ========================================================
+    # PATCH: REMOVER SUPORTE A BGRA (Revert BGRA)
+    # ========================================================
+    echo -e "${green}Applying Patch: Removing BGRA support from vk_android.c...${nocolor}"
+    
+    local target_file="src/vulkan/runtime/vk_android.c"
 
-    # NOTA: Não estamos aplicando o fix da A6xx nem merges extras.
-    # O objetivo é testar o estado puro deste commit.
+    if [ -f "$target_file" ]; then
+        # 1. Remove o case AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM e a linha seguinte (return)
+        sed -i '/case AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM:/,+1d' "$target_file"
+
+        # 2. Remove o case VK_FORMAT_B8G8R8A8_UNORM e a linha seguinte (return)
+        sed -i '/case VK_FORMAT_B8G8R8A8_UNORM:/,+1d' "$target_file"
+        
+        # Verificação simples
+        if grep -q "B8G8R8A8" "$target_file"; then
+            echo -e "${red}AVISO: O patch pode ter falhado, ainda encontrei referências a B8G8R8A8.${nocolor}"
+        else
+            echo -e "${green}Patch aplicado com sucesso! BGRA removido.${nocolor}"
+        fi
+    else
+        echo -e "${red}ERRO: Arquivo $target_file não encontrado! O layout do Mesa mudou?${nocolor}"
+        exit 1
+    fi
+    # ========================================================
 
     commit_hash="$(git rev-parse HEAD)"
     if [ -f VERSION ]; then
@@ -79,7 +93,7 @@ prepare_source() {
 }
 
 compile_mesa() {
-    echo -e "${green}Compiling Mesa (SDK $sdkver)...${nocolor}"
+    echo -e "${green}Compiling Mesa (Main - No BGRA)...${nocolor}"
     local source_dir="$workdir/mesa"
     local build_dir="$source_dir/build"
     rm -rf "$build_dir"
@@ -153,14 +167,14 @@ package_driver() {
     cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Turnip-Test-PreUnified-${short_hash}",
-  "description": "Testing Commit before Unified Image Layouts. Hash: $commit_hash",
+  "name": "Turnip-Main-NoBGRA-${short_hash}",
+  "description": "Mesa Main with BGRA support forcefully reverted in vk_android.c",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
-    zip -9 "$workdir/Turnip-Test-PreUnified-${short_hash}.zip" vulkan.ad07XX.so meta.json
+    zip -9 "$workdir/Turnip-Main-NoBGRA-${short_hash}.zip" vulkan.ad07XX.so meta.json
     echo -e "${green}Package ready.${nocolor}"
 }
 
@@ -168,15 +182,16 @@ generate_release_info() {
     cd "$workdir"
     local date_tag="$(date +'%Y%m%d')"
     local short_hash="${commit_hash:0:7}"
-    echo "Turnip-Test-${date_tag}-${short_hash}" > tag
-    echo "Turnip CI Build - Bisect Test" > release
+    echo "Turnip-NoBGRA-${date_tag}-${short_hash}" > tag
+    echo "Turnip CI Build (${date_tag})" > release
     cat <<EOF > description
 Automated Turnip CI build
 
-**Goal:** Test regression in Unity/Winlator.
-**Target:** Pre-Unified Image Layouts
-**Commit:** ${commit_hash}
+**Base:** Mesa Main
+**Patch:** Removed AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM from vk_android.c
 **SDK:** 35
+
+Commit: ${commit_hash}
 EOF
 }
 
