@@ -65,8 +65,7 @@ generate_crossfile() {
     local ndk_sysroot="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
     local cross_file="$workdir/mesa/android-aarch64"
 
-    # Nota: Adicionei static-libstdc++ aqui para garantir que o driver carregue.
-    # Sem isso, ele falha ao procurar simbolos e o Android carrega o driver antigo do sistema.
+    # Mantendo o static-libstdc++ para evitar problemas de linkagem
     cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin/llvm-ar'
@@ -88,10 +87,8 @@ compile_mesa() {
     cd "$workdir/mesa"
     rm -rf build-android-aarch64
 
-    # COMANDO EXATO QUE VOCÊ PEDIU
-    # Observação: buildtype=release não estava no seu comando, então o meson vai usar debugoptimized por padrão.
-    # Se quiser release, adicione -Dbuildtype=release
-    
+    # CORREÇÃO AQUI:
+    # Adicionadas flags para desativar dependências do libarchive que não existem no Android (OpenSSL, etc)
     meson setup build-android-aarch64 \
         --cross-file "$workdir/mesa/android-aarch64" \
         -Dplatforms=android \
@@ -104,6 +101,12 @@ compile_mesa() {
         -Db_lto=true \
         -Dstrip=true \
         -Degl=disabled \
+        -Dlibarchive:openssl=disabled \
+        -Dlibarchive:nettle=disabled \
+        -Dlibarchive:expat=disabled \
+        -Dlibarchive:iconv=disabled \
+        -Dlibarchive:xattr=false \
+        -Dlibarchive:acl=false \
         2>&1 | tee "$workdir/meson_log"
 
     ninja -C build-android-aarch64 2>&1 | tee "$workdir/ninja_log"
@@ -133,7 +136,7 @@ package_driver() {
     
     cd "$pkg"
     
-    # Ajustando o SONAME para bater com o nome do arquivo e o JSON
+    # Ajustando o SONAME
     patchelf --set-soname "vulkan.ad07xx.so" vulkan.ad07xx.so
     
     local short_hash="${commit_hash:0:7}"
