@@ -3,7 +3,7 @@ green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
 
-deps="meson ninja patchelf unzip curl pip flex bison zip git ccache"
+deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
@@ -33,7 +33,7 @@ prepare_ndk(){
 	echo "Preparing NDK ..."
 	mkdir -p "$workdir"
 	cd "$workdir"
-	if [ -z "${ANDROID_NDK_LATEST_HOME:-}" ]; then
+	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		if [ ! -d "$ndkver" ]; then
 			echo "Downloading Android NDK ..."
 			curl -L "https://dl.google.com/android/repository/${ndkver}-linux.zip" --output "${ndkver}-linux.zip" &> /dev/null
@@ -54,7 +54,11 @@ prepare_source(){
 	git clone "$mesa_repo" mesa
 	cd mesa
     
-    # REMOVIDO: Merge e Fixes manuais. Compilando Main pura.
+    # Configuração git básica
+    git config user.name "CI Builder"
+    git config user.email "ci@builder.com"
+
+    # --- REMOVIDOS: MRs e Fixes manuais (Clean Build) ---
 
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -77,7 +81,6 @@ compile_mesa(){
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
 	local cross_file="$source_dir/android-aarch64-crossfile.txt"
-    
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
@@ -102,8 +105,7 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # CORREÇÃO: Adicionei as flags para desativar dependências do libarchive 
-    # para corrigir o erro 'openssl/evp.h'
+    # Meson Setup Original (Sem flags de libarchive/openssl)
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -118,9 +120,6 @@ EOF
 		-Db_lto=true \
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
-		-Dlibarchive:openssl=disabled \
-		-Dlibarchive:iconv=disabled \
-		-Dlibarchive:xml2=disabled \
 		2>&1 | tee "$workdir/meson_log"
 
 	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
@@ -137,7 +136,7 @@ package_driver(){
 	local package_temp="$workdir/package_temp"
 	
     local lib_name="vulkan.ad07xx.so"
-
+    
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
 		exit 1
@@ -152,13 +151,13 @@ package_driver(){
 	mv lib_temp.so "$lib_name"
 
 	local short_hash=${commit_hash:0:7}
-	
-    # JSON atualizado para refletir Main Clean
+    
+    # JSON Limpo
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Mesa Turnip Clean (Main)",
-  "description": "Performance focused.",
+  "name": "Mesa Turnip Driver (Main)",
+  "description": "Official Main Branch. No patches. Commit $short_hash",
   "author": "mesa-ci",
   "packageVersion": "1",
   "vendor": "Mesa",
@@ -168,9 +167,26 @@ package_driver(){
 }
 EOF
 
-	local zip_name="Turnip_Main_$(date +'%Y%m%d')_${short_hash}.zip"
+	local zip_name="Turnip_Clean_$(date +'%Y%m%d')_${short_hash}.zip"
 	zip -9 "$workdir/$zip_name" "$lib_name" meta.json
 	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
+}
+
+generate_release_info() {
+    echo -e "${green}Generating release info...${nocolor}"
+    cd "$workdir"
+    local date_tag=$(date +'%Y%m%d')
+	local short_hash=${commit_hash:0:7}
+
+    echo "Turnip-Clean-${date_tag}-${short_hash}" > tag
+    echo "Turnip Clean Build - ${date_tag}" > release
+
+    echo "Automated Turnip Clean Build." > description
+    echo "" >> description
+    echo "**Info:**" >> description
+    echo "* Pure Main Branch" >> description
+    echo "* No custom patches applied" >> description
+    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
 }
 
 check_deps
@@ -178,3 +194,4 @@ prepare_ndk
 prepare_source
 compile_mesa
 package_driver
+generate_release_info
