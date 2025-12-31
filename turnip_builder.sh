@@ -102,7 +102,8 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # ADICIONADO: lz4=disabled e zstd=disabled para corrigir seu erro atual e o próximo.
+    # ADICIONADO: -Dzstd=disabled e -Dlz4=disabled (Global)
+    # Isso impede que o Mesa (src/util) tente incluir zstd.h
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -117,6 +118,8 @@ EOF
 		-Db_lto=true \
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
+		-Dzstd=disabled \
+		-Dlz4=disabled \
 		-Dlibarchive:openssl=disabled \
 		-Dlibarchive:iconv=disabled \
 		-Dlibarchive:xml2=disabled \
