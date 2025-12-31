@@ -3,7 +3,7 @@ green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
 
-deps="meson ninja patchelf unzip curl pip flex bison zip git"
+deps="meson ninja patchelf unzip curl pip flex bison zip git ccache"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
@@ -14,6 +14,7 @@ version_str=""
 
 check_deps(){
 	echo "Checking system dependencies ..."
+	local missing=0
 	for dep in $deps; do
 		if ! command -v $dep >/dev/null 2>&1; then
 			echo -e "$red Missing dependency: $dep$nocolor"
@@ -32,22 +33,24 @@ prepare_ndk(){
 	echo "Preparing NDK ..."
 	mkdir -p "$workdir"
 	cd "$workdir"
-	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
+	if [ -z "${ANDROID_NDK_LATEST_HOME:-}" ]; then
 		if [ ! -d "$ndkver" ]; then
 			echo "Downloading Android NDK ..."
 			curl -L "https://dl.google.com/android/repository/${ndkver}-linux.zip" --output "${ndkver}-linux.zip" &> /dev/null
 			echo "Extracting NDK ..."
-			unzip "${ndkver}-linux.zip" &> /dev/null
+			unzip -q "${ndkver}-linux.zip" &> /dev/null
 		fi
+        export ANDROID_NDK_HOME="$workdir/$ndkver"
 	else
 		echo "Using preinstalled Android NDK."
+        export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
 	fi
 }
 
 prepare_source(){
 	echo "Preparing Mesa source..."
 	cd "$workdir"
-	if [ -d mesa ]; then rm -rf mesa; fi
+	rm -rf mesa
 	git clone "$mesa_repo" mesa
 	cd mesa
     
@@ -55,14 +58,15 @@ prepare_source(){
     git config user.name "CI Builder"
     git config user.email "ci@builder.com"
 
-    # --- MERGE: MR 37802 (Autotuner Overhaul) ---
-    echo -e "${green}Merging MR 37802 (Autotuner Overhaul)...${nocolor}"
-    git fetch origin refs/merge-requests/37802/head
+    # --- MERGE: MR !35894 (Multiview / Bin Merging NEW) ---
+    echo -e "${green}Merging MR !35894 (Multiview + Bin Merging Optimizations)...${nocolor}"
+    
+    git fetch origin refs/merge-requests/35894/head
     git merge --no-edit FETCH_HEAD || {
-        echo -e "${red}Failed to merge MR 37802.${nocolor}"
+        echo -e "${red}Merge failed! Conflict with Main.${nocolor}"
         exit 1
     }
-    # --------------------------------------------
+    # ------------------------------------------------------
 
     # --- FIX: BGRA (Unity / Winlator Colors) ---
     echo "Applying BGRA Fix (Unity)..."
@@ -72,20 +76,7 @@ prepare_source(){
         sed -i '/case VK_FORMAT_B8G8R8A8_UNORM:/,+1d' "$vk_android"
     fi
 
-    # --- FIX: A6XX (Stability / Nuclear) ---
-    echo "Applying A6xx Stability Fix..."
-	if [ -f src/freedreno/vulkan/tu_query.cc ]; then
-		sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
-	fi
-
-	if [ -f src/freedreno/vulkan/tu_device.cc ]; then
-		sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
-	fi
-    
-	grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
-		sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
-		sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
-	done
+    # NOTA: Sem hacks de A6xx aqui para garantir uso do cache da CPU.
 
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -103,17 +94,13 @@ compile_mesa(){
 	local source_dir="$workdir/mesa"
 	local build_dir="$source_dir/build"
 	
-	local ndk_root_path
-	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
-		ndk_root_path="$workdir/$ndkver"
-	else
-		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
-	fi
-
+	local ndk_root_path="$ANDROID_NDK_HOME"
 	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
 	local cross_file="$source_dir/android-aarch64-crossfile.txt"
+    
+    # Static STL para garantir carregamento
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
@@ -122,6 +109,8 @@ cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroo
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk_bin_path/aarch64-linux-android-strip'
+pkgconfig = '/usr/bin/pkg-config'
+
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
@@ -130,11 +119,13 @@ endian = 'little'
 EOF
 
 	cd "$source_dir"
+    rm -rf "$build_dir"
 
 	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
+    # Build Performance (Release + LTO)
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -152,6 +143,10 @@ EOF
 		2>&1 | tee "$workdir/meson_log"
 
 	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+        echo -e "${red}Mesa build failed.${nocolor}"
+        exit 1
+    fi
 }
 
 package_driver(){
@@ -160,9 +155,8 @@ package_driver(){
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
 	
-    # Nome limpo (lowercase)
     local lib_name="vulkan.ad07xx.so"
-    
+
 	if [ ! -f "$lib_path" ]; then
 		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
 		exit 1
@@ -177,13 +171,13 @@ package_driver(){
 	mv lib_temp.so "$lib_name"
 
 	local short_hash=${commit_hash:0:7}
-    
-    # JSON LIMPO (Conforme solicitado)
+	
+    # JSON Clean (Sem poluição)
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Mesa Turnip Driver v26.0.0 (Autotuner)",
-  "description": "Main + MR37802 + UnityFix + A6xxFix. Commit $short_hash",
+  "name": "Mesa Turnip v26.0.0 (MR35894)",
+  "description": "Main + (Bin merging optimizations).",
   "author": "mesa-ci",
   "packageVersion": "1",
   "vendor": "Mesa",
@@ -193,27 +187,9 @@ package_driver(){
 }
 EOF
 
-	local zip_name="Turnip_Autotuner_$(date +'%Y%m%d')_${short_hash}.zip"
+	local zip_name="Turnip_MR35894_$(date +'%Y%m%d')_${short_hash}.zip"
 	zip -9 "$workdir/$zip_name" "$lib_name" meta.json
 	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
-}
-
-generate_release_info() {
-    echo -e "${green}Generating release info...${nocolor}"
-    cd "$workdir"
-    local date_tag=$(date +'%Y%m%d')
-	local short_hash=${commit_hash:0:7}
-
-    echo "Turnip-Autotuner-${date_tag}-${short_hash}" > tag
-    echo "Turnip CI Build - ${date_tag}" > release
-
-    echo "Automated Turnip CI build." > description
-    echo "" >> description
-    echo "**Features:**" >> description
-    echo "* Autotuner Overhaul (MR !37802)" >> description
-    echo "* BGRA Fix (Unity Colors)" >> description
-    echo "* A6xx Stability Fix" >> description
-    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
 }
 
 check_deps
@@ -221,4 +197,3 @@ prepare_ndk
 prepare_source
 compile_mesa
 package_driver
-generate_release_info
