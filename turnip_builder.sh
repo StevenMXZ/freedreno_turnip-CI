@@ -79,7 +79,6 @@ compile_mesa(){
 
 	local cross_file="$source_dir/android-aarch64-crossfile.txt"
     
-    # CORREÇÃO AQUI: Alterado de 'pkgconfig' para 'pkg-config'
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
@@ -104,6 +103,8 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
+    # ALTERADO:
+    # -Dvulkan-beta=false (Desativado para corrigir erro do SPIRV-Tools e melhorar estabilidade)
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -116,7 +117,7 @@ EOF
 		-Dglx=disabled \
 		-Dshared-glapi=enabled \
 		-Db_lto=true \
-		-Dvulkan-beta=true \
+		-Dvulkan-beta=false \
 		-Ddefault_library=shared \
 		-Dzstd=disabled \
 		-Dlibarchive:openssl=disabled \
@@ -159,8 +160,8 @@ package_driver(){
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Mesa Turnip Driver (Clean Main)",
-  "description": "Official Main Branch. No patches. Commit $short_hash",
+  "name": "Mesa Turnip Driver (Stable)",
+  "description": "Official Main Branch. No patches. Beta Disabled. Commit $short_hash",
   "author": "mesa-ci",
   "packageVersion": "1",
   "vendor": "Mesa",
@@ -170,7 +171,7 @@ package_driver(){
 }
 EOF
 
-	local zip_name="Turnip_Clean_$(date +'%Y%m%d')_${short_hash}.zip"
+	local zip_name="Turnip_Stable_$(date +'%Y%m%d')_${short_hash}.zip"
 	zip -9 "$workdir/$zip_name" "$lib_name" meta.json
 	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
 }
@@ -181,9 +182,9 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Turnip-Clean-${date_tag}-${short_hash}" > tag
-    echo "Turnip Clean Build - ${date_tag}" > release
-    echo "Automated Turnip Clean Build." > description
+    echo "Turnip-Stable-${date_tag}-${short_hash}" > tag
+    echo "Turnip Stable Build - ${date_tag}" > release
+    echo "Automated Turnip Stable Build." > description
 }
 
 check_deps
