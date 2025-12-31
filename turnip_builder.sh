@@ -54,11 +54,10 @@ prepare_source(){
 	git clone "$mesa_repo" mesa
 	cd mesa
     
-    # Configuração git básica
+    # NENHUM PATCH OU MERGE AQUI. APENAS MAIN.
+    
     git config user.name "CI Builder"
     git config user.email "ci@builder.com"
-
-    # --- REMOVIDOS: MRs e Fixes manuais (Clean Build) ---
 
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -105,7 +104,8 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # Meson Setup Original (Sem flags de libarchive/openssl)
+    # ESTAS FLAGS SÃO OBRIGATÓRIAS PORQUE O ANDROID NÃO TEM OPENSSL
+    # Se remover, o erro 'openssl/evp.h not found' volta.
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -120,6 +120,9 @@ EOF
 		-Db_lto=true \
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
+		-Dlibarchive:openssl=disabled \
+		-Dlibarchive:iconv=disabled \
+		-Dlibarchive:xml2=disabled \
 		2>&1 | tee "$workdir/meson_log"
 
 	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
@@ -152,11 +155,10 @@ package_driver(){
 
 	local short_hash=${commit_hash:0:7}
     
-    # JSON Limpo
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Mesa Turnip Driver (Main)",
+  "name": "Mesa Turnip Driver (Clean Main)",
   "description": "Official Main Branch. No patches. Commit $short_hash",
   "author": "mesa-ci",
   "packageVersion": "1",
@@ -180,13 +182,7 @@ generate_release_info() {
 
     echo "Turnip-Clean-${date_tag}-${short_hash}" > tag
     echo "Turnip Clean Build - ${date_tag}" > release
-
     echo "Automated Turnip Clean Build." > description
-    echo "" >> description
-    echo "**Info:**" >> description
-    echo "* Pure Main Branch" >> description
-    echo "* No custom patches applied" >> description
-    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
 }
 
 check_deps
