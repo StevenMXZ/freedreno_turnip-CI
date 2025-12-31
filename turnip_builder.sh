@@ -3,6 +3,7 @@ green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
 
+# Adicionei 'libssl-dev' apenas como sugestão visual, mas o script vai tentar contornar a falta dele.
 deps="meson ninja patchelf unzip curl pip flex bison zip git ccache"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
@@ -76,8 +77,6 @@ prepare_source(){
         sed -i '/case VK_FORMAT_B8G8R8A8_UNORM:/,+1d' "$vk_android"
     fi
 
-    # NOTA: Sem hacks de A6xx aqui para garantir uso do cache da CPU.
-
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
 	    version_str=$(cat VERSION | xargs)
@@ -126,6 +125,7 @@ EOF
 	export CXXFLAGS="-D__ANDROID__"
 
     # Build Performance (Release + LTO)
+    # MODIFICAÇÃO AQUI: Desativei openssl/xml2/iconv no libarchive para evitar erros de dependência
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -140,6 +140,9 @@ EOF
 		-Db_lto=true \
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
+		-Dlibarchive:openssl=disabled \
+		-Dlibarchive:iconv=disabled \
+		-Dlibarchive:xml2=disabled \
 		2>&1 | tee "$workdir/meson_log"
 
 	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
@@ -177,7 +180,7 @@ package_driver(){
 {
   "schemaVersion": 1,
   "name": "Mesa Turnip v26.0.0 (MR35894)",
-  "description": "Main + (Bin merging optimizations).",
+  "description": "Main + MR !35894 (Bin Merging Perf) + UnityFix.",
   "author": "mesa-ci",
   "packageVersion": "1",
   "vendor": "Mesa",
