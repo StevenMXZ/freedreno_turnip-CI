@@ -1,26 +1,48 @@
-name: Mesa commit diff
+name: Build Turnip 
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "20 5 1,15 * *"
 
 jobs:
-  get_commits:
+  build_and_release:
+    name: Build and Release
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout dummy
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Instalar Git
-        run: sudo apt-get update && sudo apt-get install -y git
+      - name: Prepare Environment
+        run: |
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build patchelf flex bison python3-mako python3-pip zip ccache
+          sudo apt-get build-dep mesa -y
+          pip install --upgrade meson ninja
 
-      - name: Rodar script
-        run: bash .github/scripts/get_commits.sh
+      - name: Execute Build Script
+        run: bash ./turnip_builder.sh
 
-      - name: Upload dos resultados
+      - name: Get Release Info
+        id: get_info
+        run: |
+          echo "RELEASE_NAME=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
+          echo "TAG_NAME=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
+          echo "BODY_PATH=turnip_workdir/description" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Logs
         uses: actions/upload-artifact@v4
         with:
-          name: mesa-commits-between
-          path: |
-            commits_between.txt
-            suspects.txt
+          name: build-logs
+          path: turnip_workdir/log_*.txt
+          if-no-files-found: ignore
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_info.outputs.TAG_NAME }}
+          name: ${{ steps.get_info.outputs.RELEASE_NAME }}
+          body_path: ${{ steps.get_info.outputs.BODY_PATH }}
+          files: turnip_workdir/*.zip
+          draft: false
