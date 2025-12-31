@@ -54,8 +54,6 @@ prepare_source(){
 	git clone "$mesa_repo" mesa
 	cd mesa
     
-    # NENHUM PATCH OU MERGE AQUI. APENAS MAIN.
-    
     git config user.name "CI Builder"
     git config user.email "ci@builder.com"
 
@@ -104,8 +102,7 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # ESTAS FLAGS SÃO OBRIGATÓRIAS PORQUE O ANDROID NÃO TEM OPENSSL
-    # Se remover, o erro 'openssl/evp.h not found' volta.
+    # ADICIONADO: lz4=disabled e zstd=disabled para corrigir seu erro atual e o próximo.
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -123,6 +120,8 @@ EOF
 		-Dlibarchive:openssl=disabled \
 		-Dlibarchive:iconv=disabled \
 		-Dlibarchive:xml2=disabled \
+		-Dlibarchive:lz4=disabled \
+		-Dlibarchive:zstd=disabled \
 		2>&1 | tee "$workdir/meson_log"
 
 	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
