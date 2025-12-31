@@ -3,7 +3,6 @@ green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
 
-# Adicionei 'libssl-dev' apenas como sugestão visual, mas o script vai tentar contornar a falta dele.
 deps="meson ninja patchelf unzip curl pip flex bison zip git ccache"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
@@ -49,33 +48,13 @@ prepare_ndk(){
 }
 
 prepare_source(){
-	echo "Preparing Mesa source..."
+	echo "Preparing Mesa source (Clean Main)..."
 	cd "$workdir"
 	rm -rf mesa
 	git clone "$mesa_repo" mesa
 	cd mesa
     
-    # Configuração git para merge
-    git config user.name "CI Builder"
-    git config user.email "ci@builder.com"
-
-    # --- MERGE: MR !35894 (Multiview / Bin Merging NEW) ---
-    echo -e "${green}Merging MR !35894 (Multiview + Bin Merging Optimizations)...${nocolor}"
-    
-    git fetch origin refs/merge-requests/35894/head
-    git merge --no-edit FETCH_HEAD || {
-        echo -e "${red}Merge failed! Conflict with Main.${nocolor}"
-        exit 1
-    }
-    # ------------------------------------------------------
-
-    # --- FIX: BGRA (Unity / Winlator Colors) ---
-    echo "Applying BGRA Fix (Unity)..."
-    local vk_android="src/vulkan/runtime/vk_android.c"
-    if [ -f "$vk_android" ]; then
-        sed -i '/case AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM:/,+1d' "$vk_android"
-        sed -i '/case VK_FORMAT_B8G8R8A8_UNORM:/,+1d' "$vk_android"
-    fi
+    # REMOVIDO: Merge e Fixes manuais. Compilando Main pura.
 
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -99,7 +78,6 @@ compile_mesa(){
 
 	local cross_file="$source_dir/android-aarch64-crossfile.txt"
     
-    # Static STL para garantir carregamento
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
@@ -124,8 +102,8 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # Build Performance (Release + LTO)
-    # MODIFICAÇÃO AQUI: Desativei openssl/xml2/iconv no libarchive para evitar erros de dependência
+    # CORREÇÃO: Adicionei as flags para desativar dependências do libarchive 
+    # para corrigir o erro 'openssl/evp.h'
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -175,12 +153,12 @@ package_driver(){
 
 	local short_hash=${commit_hash:0:7}
 	
-    # JSON Clean (Sem poluição)
+    # JSON atualizado para refletir Main Clean
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "Mesa Turnip v26.0.0 (MR35894)",
-  "description": "Main + MR !35894 (Bin Merging Perf) + UnityFix.",
+  "name": "Mesa Turnip Clean (Main)",
+  "description": "Performance focused.",
   "author": "mesa-ci",
   "packageVersion": "1",
   "vendor": "Mesa",
@@ -190,7 +168,7 @@ package_driver(){
 }
 EOF
 
-	local zip_name="Turnip_MR35894_$(date +'%Y%m%d')_${short_hash}.zip"
+	local zip_name="Turnip_Main_$(date +'%Y%m%d')_${short_hash}.zip"
 	zip -9 "$workdir/$zip_name" "$lib_name" meta.json
 	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
 }
