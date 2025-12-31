@@ -5,104 +5,109 @@ nocolor='\033[0m'
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
+packagedir="$workdir/turnip_module"
 ndkver="android-ndk-r29"
 sdkver="35"
-mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
+# ALTERADO: URL de volta para o repositório principal do Mesa
+mesasrc="https://gitlab.freedesktop.org/mesa/mesa.git"
+# ADICIONADO: Tag específica a ser compilada
+mesa_tag="26.0.0"
 
-commit_hash=""
-version_str=""
+base_patches=()
+experimental_patches=()
+failed_patches=()
+commit=""
+commit_short=""
+mesa_version=""
+vulkan_version=""
+clear
+
+run_all(){
+	check_deps
+	prep
+}
+
+prep () {
+	prepare_workdir
+	build_lib_for_android
+	port_lib_for_adrenotool
+}
 
 check_deps(){
-	echo "Checking system dependencies ..."
-	for dep in $deps; do
-		if ! command -v $dep >/dev/null 2>&1; then
-			echo -e "$red Missing dependency: $dep$nocolor"
-			missing=1
-		else
-			echo -e "$green Found: $dep$nocolor"
+	echo "Checking system for required Dependencies ..."
+	for deps_chk in $deps;
+		do
+			sleep 0.25
+			if command -v "$deps_chk" >/dev/null 2>&1 ; then
+				echo -e "$green - $deps_chk found $nocolor"
+			else
+				echo -e "$red - $deps_chk not found, can't continue. $nocolor"
+				deps_missing=1
+			fi;
+		done
+
+		if [ "$deps_missing" == "1" ]
+			then echo "Please install missing dependencies" && exit 1
 		fi
-	done
-	if [ "$missing" == "1" ]; then
-		echo "Please install missing dependencies." && exit 1
-	fi
-	pip install mako &> /dev/null || true
+
+	echo "Installing python Mako dependency (if missing) ..." $'\n'
+	pip install mako &> /dev/null
 }
 
-prepare_ndk(){
-	echo "Preparing NDK ..."
-	mkdir -p "$workdir"
-	cd "$workdir"
+prepare_workdir(){
+	echo "Creating and entering to work directory ..." $'\n'
+	mkdir -p "$workdir" && cd "$_"
+
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		if [ ! -d "$ndkver" ]; then
-			echo "Downloading Android NDK ..."
-			curl -L "https://dl.google.com/android/repository/${ndkver}-linux.zip" --output "${ndkver}-linux.zip" &> /dev/null
-			echo "Extracting NDK ..."
-			unzip -q "${ndkver}-linux.zip" &> /dev/null
+			echo "Downloading android-ndk from google server (~640 MB) ..." $'\n'
+			curl https://dl.google.com/android/repository/"$ndkver"-linux.zip --output "$ndkver"-linux.zip &> /dev/null
+			echo "Exracting android-ndk to a folder ..." $'\n'
+			unzip "$ndkver"-linux.zip  &> /dev/null
 		fi
-        export ANDROID_NDK_HOME="$workdir/$ndkver"
-	else
-		echo "Using preinstalled Android NDK."
-        export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+	else	
+		echo "Using android ndk from github image"
 	fi
-}
 
-prepare_source(){
-	echo "Preparing Mesa source..."
-	cd "$workdir"
+	if [ -d mesa ]; then
+		echo "Removing old mesa ..." $'\n'
+		rm -rf mesa
+	fi
 	
-	# LIMPEZA TOTAL (Essencial para evitar erros antigos)
-	if [ -d mesa ]; then rm -rf mesa; fi
-	
-	# Clone rápido (Depth 1 é seguro aqui pois usamos SED, não Merge)
-	git clone --depth=1 "$mesa_repo" mesa
+	echo "Cloning main Mesa repository..." $'\n'
+	# Clone completo para garantir que a tag exista
+	git clone "$mesasrc"
+
 	cd mesa
+	
+	# ALTERADO: Checkout para a tag específica 26.0.0
+	echo -e "${green}Checking out tag '$mesa_tag'...${nocolor}"
+	git checkout $mesa_tag
 
-    # --- FIX: OneUI / HyperOS 3 (A740 UBWC Hint) ---
-    echo -e "${green}Applying OneUI/HyperOS A740 Fix (Force UBWC Hint)...${nocolor}"
-    
-    # O arquivo onde a instância Vulkan é criada
-    local target_file="src/freedreno/vulkan/tu_instance.c"
-    
-    if [ -f "$target_file" ]; then
-        # 1. Adiciona <stdlib.h> no topo para o comando setenv funcionar
-        sed -i '1i #include <stdlib.h>' "$target_file"
-        
-        # 2. Injeta o setenv antes da inicialização do dispositivo físico
-        # Isso força a flag 'enable_tp_ubwc_flag_hint=1' dentro do driver
-        sed -i '/result = tu_physical_device_init/i setenv("FD_DEV_FEATURES", "enable_tp_ubwc_flag_hint=1", 1);' "$target_file"
-    else
-        echo -e "${red}Aviso: $target_file não encontrado. O fix não foi aplicado.${nocolor}"
-    fi
-    # -----------------------------------------------
-
-	commit_hash=$(git rev-parse HEAD)
-	if [ -f VERSION ]; then
-	    version_str=$(cat VERSION | xargs)
-	else
-	    version_str="unknown"
-	fi
-
-	cd "$workdir"
+	# Obtém o hash do commit correspondente à tag
+	commit_short=$(git rev-parse --short HEAD)
+	commit=$(git rev-parse HEAD)
+	# A versão agora é a própria tag
+	mesa_version="$mesa_tag"
+	version=$(awk -F'COMPLETE VK_MAKE_API_VERSION(|)' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
+	major=$(echo $version | cut -d "," -f 2 | xargs)
+	minor=$(echo $version | cut -d "," -f 3 | xargs)
+	patch=$(awk -F'VK_HEADER_VERSION |\n#define' '{print $2}' <<< $(cat include/vulkan/vulkan_core.h) | xargs)
+	vulkan_version="$major.$minor.$patch"
 }
 
-compile_mesa(){
-	echo -e "${green}Compiling Mesa...${nocolor}"
-
-	local source_dir="$workdir/mesa"
-	local build_dir="$source_dir/build"
-	
+build_lib_for_android(){
 	local ndk_root_path
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
 		ndk_root_path="$workdir/$ndkver"
-	else
+	else	
 		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
 	fi
-
 	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-	local cross_file="$source_dir/android-aarch64-crossfile.txt"
-	cat <<EOF > "$cross_file"
+	echo "Creating meson cross file ..." $'\n'
+	cat <<EOF >"$workdir/mesa/android-aarch64"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
 c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
@@ -110,8 +115,7 @@ cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroo
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk_bin_path/aarch64-linux-android-strip'
-pkg-config = '/usr/bin/pkg-config'
-
+pkg-config = ['env', 'PKG_CONFIG_LIBDIR=$ndk_bin_path/pkg-config', '/usr/bin/pkg-config']
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
@@ -119,96 +123,66 @@ cpu = 'armv8'
 endian = 'little'
 EOF
 
-	cd "$source_dir"
+	echo "Generating build files ..." $'\n'
+	cd "$workdir/mesa"
+	meson setup build-android-aarch64 --cross-file "android-aarch64" -Dbuildtype=release -Dplatforms=android -Dplatform-sdk-version=$sdkver -Dandroid-stub=true -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dvulkan-beta=true -Dfreedreno-kmds=kgsl -Db_lto=true -Degl=disabled 2>&1 | tee "$workdir/meson_log"
 
-	export LIBRT_LIBS=""
-	export CFLAGS="-D__ANDROID__"
-	export CXXFLAGS="-D__ANDROID__"
-
-    # Configuração Release (Clean)
-    # Sem as flags extras de libarchive pois estamos num ambiente limpo
-	meson setup "$build_dir" --cross-file "$cross_file" \
-		-Dbuildtype=release \
-		-Dplatforms=android \
-		-Dplatform-sdk-version=$sdkver \
-		-Dandroid-stub=true \
-		-Dgallium-drivers= \
-		-Dvulkan-drivers=freedreno \
-		-Dfreedreno-kmds=kgsl \
-		-Degl=disabled \
-		-Dglx=disabled \
-		-Dshared-glapi=enabled \
-		-Db_lto=true \
-		-Dvulkan-beta=false \
-		-Ddefault_library=shared \
-		2>&1 | tee "$workdir/meson_log"
-
-	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
-    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
-        echo -e "${red}Mesa build failed.${nocolor}"
-        exit 1
-    fi
+	echo "Compiling build files ..." $'\n'
+	ninja -C build-android-aarch64 2>&1 | tee "$workdir/ninja_log"
 }
 
-package_driver(){
-	local source_dir="$workdir/mesa"
-	local build_dir="$source_dir/build"
-	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
-	local package_temp="$workdir/package_temp"
-
-    local lib_name="vulkan.ad07xx.so"
-
-	if [ ! -f "$lib_path" ]; then
-		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
+port_lib_for_adrenotool(){
+	local compiled_lib="$workdir/mesa/build-android-aarch64/src/freedreno/vulkan/libvulkan_freedreno.so"
+	if [ ! -f "$compiled_lib" ]; then
+		echo -e "${red}Build failed: libvulkan_freedreno.so not found. Check compilation logs.${nocolor}"
 		exit 1
 	fi
-
-	rm -rf "$package_temp"
-	mkdir -p "$package_temp"
-	cp "$lib_path" "$package_temp/lib_temp.so"
-
-	cd "$package_temp"
-	patchelf --set-soname "$lib_name" lib_temp.so
-	mv lib_temp.so "$lib_name"
-
-	local date_meta=$(date +'%b %d, %Y')
-	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-A740-Fix-${short_hash}"
 	
-	cat <<EOF > meta.json
+	echo "Using patchelf to match soname ..."  $'\n'
+	cp "$compiled_lib" "$workdir"
+	cd "$workdir"
+	patchelf --set-soname vulkan.adreno.so libvulkan_freedreno.so
+	mv libvulkan_freedreno.so vulkan.ad07XX.so
+
+	mkdir -p "$packagedir" && cd "$_"
+
+	date=$(date +'%b %d, %Y')
+	
+	cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "$meta_name",
-  "description": "Clean Main + OneUI/HyperOS UBWC Fix (A740). Commit $short_hash",
+  "name": "Turnip - $date - $mesa_version",
+  "description": "Compiled from Mesa tag $mesa_version, Commit $commit_short",
   "author": "mesa-ci",
-  "driverVersion": "$version_str",
-  "libraryName": "$lib_name"
+  "packageVersion": "1",
+  "vendor": "Mesa",
+  "driverVersion": "$mesa_version/vk$vulkan_version",
+  "minApi": 27,
+  "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-	local zip_name="Turnip-A740-Fix-${short_hash}.zip"
-	zip -9 "$workdir/$zip_name" "$lib_name" meta.json
-	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
+	filename=turnip_"$(date +'%Y%m%d')"_"${mesa_version//./_}"
+	echo "Copy necessary files from work directory ..." $'\n'
+	cp "$workdir"/vulkan.ad07XX.so "$packagedir"
+
+	echo "Packing files in to adrenotool package ..." $'\n'
+	cd "$packagedir"
+	zip -9 "$workdir"/"$filename".zip ./*
+
+	cd "$workdir"
+
+	echo "Turnip - Mesa $mesa_version - $date" > release
+	echo "${mesa_version//./_}_${commit_short}" > tag # Tag para release no GitHub
+	echo  $filename > filename
+	# Descrição atualizada para refletir a tag
+	echo "### Build from Mesa tag: $mesa_version" > description
+	echo "### Commit: [$commit_short](https://gitlab.freedesktop.org/mesa/mesa/-/commit/$commit)" >> description
+	
+	if ! [ -a "$workdir"/"$filename".zip ];
+		then echo -e "$red-Packing failed!$nocolor" && exit 1
+		else echo -e "$green-All done, you can take your zip from this folder;$nocolor" && echo "$workdir"/
+	fi
 }
 
-generate_release_info() {
-    echo -e "${green}Generating release info...${nocolor}"
-    cd "$workdir"
-    local date_tag=$(date +'%Y%m%d')
-	local short_hash=${commit_hash:0:7}
-
-    echo "Turnip-A740-${date_tag}-${short_hash}" > tag
-    echo "Turnip A740 Fix - ${date_tag}" > release
-
-    echo "Turnip build com correção para OneUI/HyperOS (Adreno 740)." > description
-    echo "" >> description
-    echo "**Fix:** Enable UBWC Flag Hint (Forced)" >> description
-    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
-}
-
-check_deps
-prepare_ndk
-prepare_source
-compile_mesa
-package_driver
-generate_release_info
+run_all
