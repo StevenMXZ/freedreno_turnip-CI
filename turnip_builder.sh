@@ -78,6 +78,8 @@ compile_mesa(){
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
 	local cross_file="$source_dir/android-aarch64-crossfile.txt"
+    
+    # CORREÇÃO AQUI: Alterado de 'pkgconfig' para 'pkg-config'
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
@@ -86,7 +88,7 @@ cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroo
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk_bin_path/aarch64-linux-android-strip'
-pkgconfig = '/usr/bin/pkg-config'
+pkg-config = '/usr/bin/pkg-config'
 
 [host_machine]
 system = 'android'
@@ -102,8 +104,6 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # ADICIONADO: -Dzstd=disabled e -Dlz4=disabled (Global)
-    # Isso impede que o Mesa (src/util) tente incluir zstd.h
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -119,7 +119,6 @@ EOF
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
 		-Dzstd=disabled \
-		-Dlz4=disabled \
 		-Dlibarchive:openssl=disabled \
 		-Dlibarchive:iconv=disabled \
 		-Dlibarchive:xml2=disabled \
