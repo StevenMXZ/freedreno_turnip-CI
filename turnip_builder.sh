@@ -37,10 +37,12 @@ prepare_ndk(){
 			echo "Downloading Android NDK ..."
 			curl -L "https://dl.google.com/android/repository/${ndkver}-linux.zip" --output "${ndkver}-linux.zip" &> /dev/null
 			echo "Extracting NDK ..."
-			unzip "${ndkver}-linux.zip" &> /dev/null
+			unzip -q "${ndkver}-linux.zip" &> /dev/null
 		fi
+        export ANDROID_NDK_HOME="$workdir/$ndkver"
 	else
 		echo "Using preinstalled Android NDK."
+        export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
 	fi
 }
 
@@ -48,26 +50,15 @@ prepare_source(){
 	echo "Preparing Mesa source..."
 	cd "$workdir"
 	
-    # LIMPEZA TOTAL (O segredo do script que funcionou)
+	# Limpeza inicial total
 	if [ -d mesa ]; then rm -rf mesa; fi
 	
-    # NOTA: Removi '--depth=1' aqui. 
-    # É necessário baixar o histórico completo para que o MERGE abaixo funcione.
+	# Clone limpo (sem depth=1 para facilitar o fetch da MR do autotuner depois)
 	git clone "$mesa_repo" mesa
 	cd mesa
 
-    # Configuração obrigatória para o merge
     git config user.name "CI Builder"
     git config user.email "ci@builder.com"
-
-    # --- MR !39113: Fix use-after-free (Estabilidade) ---
-    echo -e "${green}Merging MR !39113 (Crash Fix)...${nocolor}"
-    git fetch origin refs/merge-requests/39113/head
-    git merge --no-edit FETCH_HEAD || {
-        echo -e "${red}Merge failed! Conflict with Main.${nocolor}"
-        exit 1
-    }
-    # ----------------------------------------------------
 
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -79,19 +70,20 @@ prepare_source(){
 	cd "$workdir"
 }
 
-compile_mesa(){
-	echo -e "${green}Compiling Mesa...${nocolor}"
+# Função genérica para compilar e empacotar
+do_build_cycle(){
+    local build_name="$1"
+    local zip_tag="$2"
+    
+    echo -e "${green}>>> Starting Build: $build_name${nocolor}"
 
 	local source_dir="$workdir/mesa"
 	local build_dir="$source_dir/build"
 	
-	local ndk_root_path
-	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
-		ndk_root_path="$workdir/$ndkver"
-	else
-		ndk_root_path="$ANDROID_NDK_LATEST_HOME"
-	fi
-
+    # Limpa build anterior
+    rm -rf "$build_dir"
+	
+	local ndk_root_path="$ANDROID_NDK_HOME"
 	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
@@ -104,6 +96,8 @@ cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroo
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk_bin_path/aarch64-linux-android-strip'
+pkg-config = '/usr/bin/pkg-config'
+
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
@@ -112,13 +106,10 @@ endian = 'little'
 EOF
 
 	cd "$source_dir"
-
 	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # Mantendo as flags originais do script que funcionou (sem libarchive/zstd disable)
-    # Adicionei apenas vulkan-beta=false para garantir estabilidade com o fix.
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -133,70 +124,125 @@ EOF
 		-Db_lto=true \
 		-Dvulkan-beta=false \
 		-Ddefault_library=shared \
-		2>&1 | tee "$workdir/meson_log"
+		2>&1 | tee "$workdir/meson_log_${zip_tag}"
 
-	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
-}
+	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log_${zip_tag}"
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+        echo -e "${red}Build $build_name failed.${nocolor}"
+        exit 1
+    fi
 
-package_driver(){
-	local source_dir="$workdir/mesa"
-	local build_dir="$source_dir/build"
+    # Empacotamento
 	local lib_path="$build_dir/src/freedreno/vulkan/libvulkan_freedreno.so"
 	local package_temp="$workdir/package_temp"
-
-	if [ ! -f "$lib_path" ]; then
-		echo -e "${red}Build failed: libvulkan_freedreno.so not found.${nocolor}"
-		exit 1
-	fi
+    local lib_name="vulkan.ad07xx.so" 
 
 	rm -rf "$package_temp"
 	mkdir -p "$package_temp"
 	cp "$lib_path" "$package_temp/lib_temp.so"
 
 	cd "$package_temp"
-	patchelf --set-soname "vulkan.adreno.so" lib_temp.so
-	mv lib_temp.so "vulkan.ad07XX.so"
+	patchelf --set-soname "$lib_name" lib_temp.so
+	mv lib_temp.so "$lib_name"
 
-	local date_meta=$(date +'%b %d, %Y')
-	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-CrashFix-${short_hash}"
+    # Pega o hash atual (pode mudar se for MR)
+    local current_hash=$(git rev-parse --short HEAD)
+	local meta_name="Turnip-${zip_tag}-${current_hash}"
 	
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Main Branch + MR 39113 (Use-After-Free Fix). Commit $short_hash",
+  "description": "Variant: $build_name. Hash: $current_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
-  "libraryName": "vulkan.ad07XX.so"
+  "libraryName": "$lib_name"
 }
 EOF
 
-	local zip_name="Turnip-CrashFix-${short_hash}.zip"
-	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
+	local zip_name="Turnip-${zip_tag}-${current_hash}.zip"
+	zip -9 "$workdir/$zip_name" "$lib_name" meta.json
 	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
-}
-
-generate_release_info() {
-    echo -e "${green}Generating release info...${nocolor}"
     cd "$workdir"
-    local date_tag=$(date +'%Y%m%d')
-	local short_hash=${commit_hash:0:7}
-
-    echo "Turnip-CrashFix-${date_tag}-${short_hash}" > tag
-    echo "Turnip Stable Build - ${date_tag} (CrashFix)" > release
-
-    echo "Automated Turnip CI build." > description
-    echo "" >> description
-    echo "### Build Details:" >> description
-    echo "**Base:** Mesa Main" >> description
-    echo "**Fixes:** MR !39113 (Use-After-Free / Crash Fix)" >> description
-    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
 }
+
+# --- Lógica Principal ---
 
 check_deps
 prepare_ndk
 prepare_source
-compile_mesa
-package_driver
-generate_release_info
+
+# 1. BUILD SYSMEM (Aplica patch tu_cmd_buffer.cc)
+echo -e "${green}=== 1/4: Building Sysmem Version ===${nocolor}"
+cd "$workdir/mesa"
+git checkout . 
+git clean -fd
+
+file_sysmem="src/freedreno/vulkan/tu_cmd_buffer.cc"
+if [ -f "$file_sysmem" ]; then
+    echo "Applying Sysmem patch..."
+    sed -i '/if (TU_DEBUG(SYSMEM)) {/i \   return true;' "$file_sysmem"
+else
+    echo -e "${red}Erro: Arquivo $file_sysmem não encontrado!${nocolor}"
+fi
+do_build_cycle "Sysmem (Forced)" "Sysmem"
+
+
+# 2. BUILD ONEUI FIX (Aplica patch freedreno_devices.py)
+echo -e "${green}=== 2/4: Building OneUI/HyperOS Fix Version ===${nocolor}"
+cd "$workdir/mesa"
+git checkout .
+git clean -fd
+
+file_devs="src/freedreno/common/freedreno_devices.py"
+if [ -f "$file_devs" ]; then
+    echo "Applying OneUI/HyperOS Fix patch..."
+    sed -i 's/\[a7xx_base, a7xx_gen2\]/\[a7xx_base, a7xx_gen2, GPUProps(enable_tp_ubwc_flag_hint = True)\]/' "$file_devs"
+else
+    echo -e "${red}Erro: Arquivo $file_devs não encontrado!${nocolor}"
+fi
+do_build_cycle "OneUI-Fix" "OneUI_Fix"
+
+
+# 3. BUILD A6XX + SYSMEM (Patch A6xx + Patch Sysmem)
+echo -e "${green}=== 3/4: Building A6xx + Sysmem Version ===${nocolor}"
+cd "$workdir/mesa"
+git checkout .
+git clean -fd
+
+echo "Applying A6xx Stability Patches..."
+if [ -f src/freedreno/vulkan/tu_query.cc ]; then
+    sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
+fi
+if [ -f src/freedreno/vulkan/tu_device.cc ]; then
+    sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
+fi
+grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
+    sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
+    sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
+done
+
+echo "Applying Sysmem patch (on top of A6xx)..."
+if [ -f "$file_sysmem" ]; then
+    sed -i '/if (TU_DEBUG(SYSMEM)) {/i \   return true;' "$file_sysmem"
+fi
+do_build_cycle "A6xx-Sysmem" "A6xx_Sysmem"
+
+
+# 4. BUILD AUTOTUNER (MR !37802)
+echo -e "${green}=== 4/4: Building Autotuner (MR !37802) ===${nocolor}"
+cd "$workdir/mesa"
+git checkout .
+git clean -fd
+
+echo "Fetching MR !37802..."
+git fetch origin refs/merge-requests/37802/head
+git checkout FETCH_HEAD
+
+do_build_cycle "Autotuner" "Autotuner"
+
+
+# Finalização
+echo -e "${green}All 4 builds completed!${nocolor}"
+cd "$workdir"
+ls -lh *.zip
