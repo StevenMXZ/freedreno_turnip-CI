@@ -3,46 +3,42 @@ name: Build Turnip
 on:
   workflow_dispatch:
   schedule:
-    - cron: "20 5 1,15 * *"
+  - cron: "20 5 1,15 * *"
 
 jobs:
-  build_and_release:
-    name: Build and Release
-    runs-on: ubuntu-latest
+  build_turnip:
+    runs-on: ubuntu-24.04
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v3
 
-      - name: Prepare Environment
-        run: |
-          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get update
-          sudo apt-get install -y meson ninja-build patchelf flex bison python3-mako python3-pip zip ccache
-          sudo apt-get build-dep mesa -y
-          pip install --upgrade meson ninja
+    - name: Prepare environment
+      run: |
+        sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+        sudo apt update
+        # AQUI ESTA A CORRECAO: Instalando dependencias que faltavam
+        sudo apt install -y libssl-dev libzstd-dev libarchive-dev python3-mako python3-pip flex bison
+        sudo apt build-dep mesa -y
+    
+    - name: Execute build script
+      run: bash ./turnip_builder.sh
 
-      - name: Execute Build Script
-        run: bash ./turnip_builder.sh
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: turnip-drivers
+        path: turnip_workdir/*.zip
 
-      - name: Get Release Info
-        id: get_info
-        run: |
-          echo "RELEASE_NAME=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
-          echo "TAG_NAME=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
-          echo "BODY_PATH=turnip_workdir/description" >> "$GITHUB_OUTPUT"
+    - name: Get Release Info
+      id: info
+      run: |
+        echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        echo "tag=Turnip-CI-$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
 
-      - name: Upload Logs
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: turnip_workdir/log_*.txt
-          if-no-files-found: ignore
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.get_info.outputs.TAG_NAME }}
-          name: ${{ steps.get_info.outputs.RELEASE_NAME }}
-          body_path: ${{ steps.get_info.outputs.BODY_PATH }}
-          files: turnip_workdir/*.zip
-          draft: false
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        name: Turnip CI Build ${{ steps.info.outputs.date }}
+        tag_name: ${{ steps.info.outputs.tag }}
+        body_path: turnip_workdir/release_notes.txt
+        files: |
+           turnip_workdir/*.zip
