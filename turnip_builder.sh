@@ -9,7 +9,6 @@ ndkver="android-ndk-r29"
 sdkver="35"
 mesa_repo="https://gitlab.freedesktop.org/mesa/mesa.git"
 
-# Variáveis globais
 commit_short=""
 mesa_version=""
 
@@ -30,7 +29,6 @@ prepare_workdir(){
 	mkdir -p "$workdir"
 	cd "$workdir"
 
-    # Configuração NDK
 	if [ -z "${ANDROID_NDK_LATEST_HOME}" ] || [ ! -d "${ANDROID_NDK_LATEST_HOME}" ]; then
 		if [ ! -d "$ndkver" ]; then
 			echo "Downloading Android NDK..."
@@ -43,7 +41,6 @@ prepare_workdir(){
         export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME}"
 	fi
 
-    # Clone Limpo
 	if [ -d mesa ]; then rm -rf mesa; fi
 	echo "Cloning Mesa..."
 	git clone "$mesa_repo" mesa
@@ -57,45 +54,45 @@ prepare_workdir(){
 	cd "$workdir"
 }
 
-# --- FUNÇÕES DE PATCH ---
+# --- FUNÇÕES DE PATCH (Caminhos Corrigidos) ---
 
-# 1. Patch Sysmem (Força renderização via sistema)
+# Nota: Estas funções assumem que você já está dentro da pasta 'mesa'
+
 apply_sysmem_patch() {
     echo -e "${green}Applying Patch: Force Sysmem...${nocolor}"
     local file="src/freedreno/vulkan/tu_cmd_buffer.cc"
-    # Insere 'return true;' antes da verificação de debug, forçando o modo sysmem
-    if [ -f "mesa/$file" ]; then
-        sed -i '/if (TU_DEBUG(SYSMEM)) {/i \   return true;' "mesa/$file"
+    # Correção: removido prefixo 'mesa/' pois já estaremos dentro da pasta
+    if [ -f "$file" ]; then
+        sed -i '/if (TU_DEBUG(SYSMEM)) {/i \   return true;' "$file"
     else
-        echo -e "${red}Error: $file not found!${nocolor}"
+        echo -e "${red}Error: $file not found! PWD: $(pwd)${nocolor}"
+        exit 1
     fi
 }
 
-# 2. Patch OneUI/A740 (Corrige driver Samsung/HyperOS)
 apply_oneui_patch() {
     echo -e "${green}Applying Patch: OneUI/A740 Fix...${nocolor}"
     local file="src/freedreno/common/freedreno_devices.py"
-    if [ -f "mesa/$file" ]; then
-        sed -i 's/\[a7xx_base, a7xx_gen2\]/\[a7xx_base, a7xx_gen2, GPUProps(enable_tp_ubwc_flag_hint = True)\]/' "mesa/$file"
+    if [ -f "$file" ]; then
+        sed -i 's/\[a7xx_base, a7xx_gen2\]/\[a7xx_base, a7xx_gen2, GPUProps(enable_tp_ubwc_flag_hint = True)\]/' "$file"
+    else
+        echo -e "${red}Error: $file not found!${nocolor}"
+        exit 1
     fi
 }
 
-# 3. Patch A6xx Stability (Nuclear Option)
 apply_a6xx_patch() {
     echo -e "${green}Applying Patch: A6xx Stability...${nocolor}"
     
-    # Parte 1: Query fix
-    if [ -f mesa/src/freedreno/vulkan/tu_query.cc ]; then
-        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' mesa/src/freedreno/vulkan/tu_query.cc
+    if [ -f src/freedreno/vulkan/tu_query.cc ]; then
+        sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
     fi
     
-    # Parte 2: Disable cached memory
-    if [ -f mesa/src/freedreno/vulkan/tu_device.cc ]; then
-        sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' mesa/src/freedreno/vulkan/tu_device.cc || true
+    if [ -f src/freedreno/vulkan/tu_device.cc ]; then
+        sed -i 's/physical_device->has_cached_coherent_memory = .*/physical_device->has_cached_coherent_memory = false;/' src/freedreno/vulkan/tu_device.cc || true
     fi
     
-    # Parte 3: Replace flags
-    grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" mesa/src/freedreno/vulkan/ | while read file; do
+    grep -rl "VK_MEMORY_PROPERTY_HOST_CACHED_BIT" src/freedreno/vulkan/ | while read file; do
         sed -i 's/dev->physical_device->has_cached_coherent_memory ? VK_MEMORY_PROPERTY_HOST_CACHED_BIT : 0/0/g' "$file" || true
         sed -i 's/VK_MEMORY_PROPERTY_HOST_CACHED_BIT/0/g' "$file" || true
     done
@@ -109,11 +106,13 @@ build_variant() {
     
     echo -e "${green}>>> Building Variant: $variant_name${nocolor}"
     
+    # Garante que estamos na raiz do mesa
     cd "$workdir/mesa"
     
     local ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
     local cross_file="$workdir/android-aarch64"
     
+    # Correção: pkgconfig -> pkg-config
 	cat <<EOF >"$cross_file"
 [binaries]
 ar = '$ndk/llvm-ar'
@@ -122,7 +121,7 @@ cpp = ['ccache', '$ndk/aarch64-linux-android$sdkver-clang++', '-fno-exceptions',
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk/aarch64-linux-android-strip'
-pkgconfig = '/usr/bin/pkg-config'
+pkg-config = '/usr/bin/pkg-config'
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
@@ -130,6 +129,7 @@ cpu = 'armv8'
 endian = 'little'
 EOF
 
+    # Correção: Removido -Dlibarchive=disabled (causava erro)
     rm -rf build-android
     meson setup build-android \
         --cross-file "$cross_file" \
@@ -143,7 +143,6 @@ EOF
         -Dfreedreno-kmds=kgsl \
         -Db_lto=true \
         -Degl=disabled \
-        -Dlibarchive=disabled \
         &> "$workdir/meson_log_$zip_suffix"
 
     ninja -C build-android &> "$workdir/ninja_log_$zip_suffix"
@@ -151,6 +150,8 @@ EOF
     if [ ! -f build-android/src/freedreno/vulkan/libvulkan_freedreno.so ]; then
         echo -e "${red}Build failed for $variant_name${nocolor}"
         cat "$workdir/meson_log_$zip_suffix"
+        # Mostra o erro do ninja se falhar
+        tail -n 20 "$workdir/ninja_log_$zip_suffix"
         return 1
     fi
 
@@ -182,7 +183,7 @@ EOF
     echo "- **$variant_name**: $filename.zip" >> release_notes.txt
 }
 
-# --- EXECUÇÃO DAS 4 VERSÕES ---
+# --- EXECUÇÃO ---
 
 check_deps
 prepare_workdir
@@ -205,13 +206,13 @@ git clean -fd
 apply_oneui_patch
 build_variant "OneUI_Fix" "oneui"
 
-# 3. BUILD A6XX + SYSMEM (COMBINADO)
+# 3. BUILD A6XX + SYSMEM
 echo "--- Preparing A6xx + Sysmem ---"
 cd "$workdir/mesa"
 git checkout .
 git clean -fd
-apply_a6xx_patch   # Primeiro aplica o fix da A6xx
-apply_sysmem_patch # Depois aplica o fix do Sysmem em cima
+apply_a6xx_patch
+apply_sysmem_patch
 build_variant "A6xx_Sysmem" "a6xx"
 
 # 4. BUILD AUTOTUNER
