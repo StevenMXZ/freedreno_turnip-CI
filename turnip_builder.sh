@@ -13,14 +13,7 @@ commit_short=""
 mesa_version=""
 
 check_deps(){
-	echo "Checking system dependencies..."
-	for dep in $deps; do
-		if ! command -v $dep >/dev/null 2>&1; then
-			echo -e "$red Missing dependency: $dep$nocolor"
-		else
-			echo -e "$green Found: $dep$nocolor"
-		fi
-	done
+	echo "Checking dependencies..."
 	pip install mako &> /dev/null || true
 }
 
@@ -43,7 +36,7 @@ prepare_workdir(){
 
 	if [ -d mesa ]; then rm -rf mesa; fi
 	echo "Cloning Mesa..."
-	git clone "$mesa_repo" mesa
+	git clone --depth=1 "$mesa_repo" mesa
 	cd mesa
     
     git config user.name "CI Builder"
@@ -54,35 +47,37 @@ prepare_workdir(){
 	cd "$workdir"
 }
 
-# --- FUNÇÕES DE PATCH (Caminhos Corrigidos) ---
-
-# Nota: Estas funções assumem que você já está dentro da pasta 'mesa'
+# --- FUNÇÕES DE PATCH ---
 
 apply_sysmem_patch() {
     echo -e "${green}Applying Patch: Force Sysmem...${nocolor}"
+    cd "$workdir/mesa"
     local file="src/freedreno/vulkan/tu_cmd_buffer.cc"
-    # Correção: removido prefixo 'mesa/' pois já estaremos dentro da pasta
+    
     if [ -f "$file" ]; then
-        sed -i '/if (TU_DEBUG(SYSMEM)) {/i \   return true;' "$file"
+        # Verifica se já foi aplicado para não duplicar
+        if ! grep -q "return true;" "$file"; then
+            sed -i '/if (TU_DEBUG(SYSMEM)) {/i \   return true;' "$file"
+        fi
     else
-        echo -e "${red}Error: $file not found! PWD: $(pwd)${nocolor}"
-        exit 1
+        echo -e "${red}Error: $file not found!${nocolor}" && exit 1
     fi
 }
 
 apply_oneui_patch() {
     echo -e "${green}Applying Patch: OneUI/A740 Fix...${nocolor}"
+    cd "$workdir/mesa"
     local file="src/freedreno/common/freedreno_devices.py"
     if [ -f "$file" ]; then
         sed -i 's/\[a7xx_base, a7xx_gen2\]/\[a7xx_base, a7xx_gen2, GPUProps(enable_tp_ubwc_flag_hint = True)\]/' "$file"
     else
-        echo -e "${red}Error: $file not found!${nocolor}"
-        exit 1
+        echo -e "${red}Error: $file not found!${nocolor}" && exit 1
     fi
 }
 
 apply_a6xx_patch() {
     echo -e "${green}Applying Patch: A6xx Stability...${nocolor}"
+    cd "$workdir/mesa"
     
     if [ -f src/freedreno/vulkan/tu_query.cc ]; then
         sed -i 's/tu_bo_init_new_cached/tu_bo_init_new/g' src/freedreno/vulkan/tu_query.cc
@@ -106,13 +101,11 @@ build_variant() {
     
     echo -e "${green}>>> Building Variant: $variant_name${nocolor}"
     
-    # Garante que estamos na raiz do mesa
     cd "$workdir/mesa"
     
     local ndk="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
     local cross_file="$workdir/android-aarch64"
     
-    # Correção: pkgconfig -> pkg-config
 	cat <<EOF >"$cross_file"
 [binaries]
 ar = '$ndk/llvm-ar'
@@ -129,7 +122,7 @@ cpu = 'armv8'
 endian = 'little'
 EOF
 
-    # Correção: Removido -Dlibarchive=disabled (causava erro)
+    # AQUI ESTA A CORRECAO DO ERRO: zstd=disabled
     rm -rf build-android
     meson setup build-android \
         --cross-file "$cross_file" \
@@ -143,19 +136,20 @@ EOF
         -Dfreedreno-kmds=kgsl \
         -Db_lto=true \
         -Degl=disabled \
+        -Dzstd=disabled \
+        -Dlibarchive=disabled \
         &> "$workdir/meson_log_$zip_suffix"
 
     ninja -C build-android &> "$workdir/ninja_log_$zip_suffix"
     
     if [ ! -f build-android/src/freedreno/vulkan/libvulkan_freedreno.so ]; then
         echo -e "${red}Build failed for $variant_name${nocolor}"
-        cat "$workdir/meson_log_$zip_suffix"
-        # Mostra o erro do ninja se falhar
+        echo "Last 50 lines of log:"
+        tail -n 50 "$workdir/meson_log_$zip_suffix"
         tail -n 20 "$workdir/ninja_log_$zip_suffix"
         return 1
     fi
 
-    # Packaging
     cd "$workdir"
     cp "mesa/build-android/src/freedreno/vulkan/libvulkan_freedreno.so" .
     patchelf --set-soname "vulkan.adreno.so" libvulkan_freedreno.so
