@@ -58,8 +58,6 @@ prepare_source(){
 	git clone "$mesa_repo" mesa
 	cd mesa
     git checkout "$mesa_branch"
-
-    # NENHUM PATCH ESTÁ SENDO APLICADO AQUI
     
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -105,7 +103,9 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # ZSTD e Libarchive desativados para compatibilidade com NDK
+    # Opções removidas para corrigir erros:
+    # -Dlibarchive=disabled (Causava "Unknown option")
+    # -Dshared-glapi=enabled (Causava "Deprecation warning")
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -116,12 +116,10 @@ EOF
 		-Dfreedreno-kmds=kgsl \
 		-Degl=disabled \
 		-Dglx=disabled \
-		-Dshared-glapi=enabled \
 		-Db_lto=true \
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
         -Dzstd=disabled \
-        -Dlibarchive=disabled \
 		2>&1 | tee "$workdir/meson_log"
 
 	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
