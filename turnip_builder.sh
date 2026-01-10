@@ -93,6 +93,8 @@ compile_mesa(){
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
 	local cross_file="$source_dir/android-aarch64-crossfile.txt"
+    # REMOVIDO: pkg-config = '/usr/bin/pkg-config'
+    # Isso evita que o Meson ache bibliotecas do Ubuntu (como libelf) e tente linkar no Android
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
@@ -101,7 +103,6 @@ cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroo
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk_bin_path/aarch64-linux-android-strip'
-pkg-config = '/usr/bin/pkg-config'
 
 [host_machine]
 system = 'android'
@@ -116,7 +117,7 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # CORREÇÃO: -Dlibelf=disabled adicionado
+    # Flags limpas para evitar erros de opção desconhecida
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -131,7 +132,6 @@ EOF
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
         -Dzstd=disabled \
-        -Dlibelf=disabled \
         --force-fallback-for=spirv-tools,spirv-headers \
 		2>&1 | tee "$workdir/meson_log"
 
