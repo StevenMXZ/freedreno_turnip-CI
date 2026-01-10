@@ -7,9 +7,11 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
-# REPO do Rob Clark (Branch tu/gen8)
-mesa_repo="https://gitlab.freedesktop.org/robclark/mesa.git"
-mesa_branch="tu/gen8"
+
+# --- AQUI ESTÁ A MÁGICA ---
+# Apontamos direto para o fork que já tem os hacks/patches
+mesa_repo="https://github.com/whitebelyash/mesa-tu8.git"
+mesa_branch="gen8-hacks"
 
 commit_hash=""
 version_str=""
@@ -53,24 +55,23 @@ prepare_source(){
 	cd "$workdir"
 	if [ -d mesa ]; then rm -rf mesa; fi
 	
-    # Clone do repositório específico
+    # Clone do repositório JÁ PATCHEADO
     echo "Cloning from $mesa_repo branch $mesa_branch..."
 	git clone --depth=1 --branch "$mesa_branch" "$mesa_repo" mesa
 	cd mesa
 
-    # --- CORREÇÃO DO ERRO SPIRV (MANUAL) ---
+    # --- CORREÇÃO DE DEPENDÊNCIAS (SPIRV) ---
+    # Mesmo sendo um fork, precisamos baixar as dependências externas manualmente
+    # para garantir que o Meson não falhe no ambiente CI.
     echo "Manually cloning dependencies to subprojects..."
     mkdir -p subprojects
     cd subprojects
     
-    # Remove versões antigas e baixa novas
     rm -rf spirv-tools spirv-headers
-    
-    # Clona dependências essenciais
     git clone --depth=1 https://github.com/KhronosGroup/SPIRV-Tools.git spirv-tools
     git clone --depth=1 https://github.com/KhronosGroup/SPIRV-Headers.git spirv-headers
     
-    cd .. # Volta para a raiz do mesa
+    cd .. 
     
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -93,8 +94,8 @@ compile_mesa(){
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
 	local cross_file="$source_dir/android-aarch64-crossfile.txt"
-    # REMOVIDO: pkg-config = '/usr/bin/pkg-config'
-    # Isso evita que o Meson ache bibliotecas do Ubuntu (como libelf) e tente linkar no Android
+    
+    # Arquivo cross LIMPO (sem pkg-config) para evitar erros de libelf/linker
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
@@ -117,7 +118,10 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # Flags limpas para evitar erros de opção desconhecida
+    # Configuração BLINDADA:
+    # 1. Sem patches (já estão no repo)
+    # 2. Sem libarchive/zstd (evita erros de build)
+    # 3. Com SPIRV manual (evita erro de include)
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -132,6 +136,7 @@ EOF
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
         -Dzstd=disabled \
+        -Dlibarchive=disabled \
         --force-fallback-for=spirv-tools,spirv-headers \
 		2>&1 | tee "$workdir/meson_log"
 
@@ -158,19 +163,19 @@ package_driver(){
 	mv lib_temp.so "vulkan.ad07XX.so"
 
 	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-Gen8-Clean-${short_hash}"
+	local meta_name="Turnip-Gen8-Hacks-${short_hash}"
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Turnip Gen8 (Robclark) - No Patches. Commit $short_hash",
+  "description": "Turnip Gen8 Hacks (whitebelyash). Commit $short_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-	local zip_name="Turnip-Gen8-Clean-${short_hash}.zip"
+	local zip_name="Turnip-Gen8-Hacks-${short_hash}.zip"
 	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
 	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
 }
@@ -182,14 +187,14 @@ generate_release_info() {
 	local short_hash=${commit_hash:0:7}
 
     echo "Turnip-Gen8-${date_tag}-${short_hash}" > tag
-    echo "Turnip Gen8 (Clean) - ${date_tag}" > release
+    echo "Turnip Gen8 (Hacks) - ${date_tag}" > release
 
-    echo "Automated Turnip Build from robclark/mesa (tu/gen8)." > description
+    echo "Automated Turnip Build from whitebelyash/mesa-tu8 (gen8-hacks)." > description
     echo "" >> description
     echo "### Build Details:" >> description
-    echo "**Base:** robclark/mesa (Branch: tu/gen8)" >> description
-    echo "**Patches:** None (Clean Build)" >> description
-    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/-/commit/${commit_hash})" >> description
+    echo "**Base:** whitebelyash/mesa-tu8 (Branch: gen8-hacks)" >> description
+    echo "**Patches:** Included in source (No manual patch applied)" >> description
+    echo "**Commit:** [${short_hash}](${mesa_repo%.git}/commit/${commit_hash})" >> description
 }
 
 check_deps
