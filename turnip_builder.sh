@@ -8,8 +8,7 @@ workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
 
-# --- AQUI ESTÁ A MÁGICA ---
-# Apontamos direto para o fork que já tem os hacks/patches
+# REPO CORRETO (Fork com os hacks já aplicados)
 mesa_repo="https://github.com/whitebelyash/mesa-tu8.git"
 mesa_branch="gen8-hacks"
 
@@ -55,14 +54,11 @@ prepare_source(){
 	cd "$workdir"
 	if [ -d mesa ]; then rm -rf mesa; fi
 	
-    # Clone do repositório JÁ PATCHEADO
     echo "Cloning from $mesa_repo branch $mesa_branch..."
 	git clone --depth=1 --branch "$mesa_branch" "$mesa_repo" mesa
 	cd mesa
 
-    # --- CORREÇÃO DE DEPENDÊNCIAS (SPIRV) ---
-    # Mesmo sendo um fork, precisamos baixar as dependências externas manualmente
-    # para garantir que o Meson não falhe no ambiente CI.
+    # --- CORREÇÃO SPIRV (Manual) ---
     echo "Manually cloning dependencies to subprojects..."
     mkdir -p subprojects
     cd subprojects
@@ -95,7 +91,7 @@ compile_mesa(){
 
 	local cross_file="$source_dir/android-aarch64-crossfile.txt"
     
-    # Arquivo cross LIMPO (sem pkg-config) para evitar erros de libelf/linker
+    # ATENÇÃO: pkg-config REMOVIDO propositalmente para evitar erro de libelf
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
@@ -118,10 +114,9 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # Configuração BLINDADA:
-    # 1. Sem patches (já estão no repo)
-    # 2. Sem libarchive/zstd (evita erros de build)
-    # 3. Com SPIRV manual (evita erro de include)
+    # SETUP DO MESON CORRIGIDO:
+    # 1. Sem -Dlibarchive=disabled (Remove o erro Unknown option)
+    # 2. Com --force-fallback (Usa o SPIRV que baixamos)
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -136,7 +131,6 @@ EOF
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
         -Dzstd=disabled \
-        -Dlibarchive=disabled \
         --force-fallback-for=spirv-tools,spirv-headers \
 		2>&1 | tee "$workdir/meson_log"
 
