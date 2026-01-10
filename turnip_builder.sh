@@ -12,7 +12,7 @@ sdkver="35"
 base_repo="https://gitlab.freedesktop.org/robclark/mesa.git"
 base_branch="tu/gen8"
 
-# 2. HACKS: Whitebelyash (O patch)
+# 2. HACKS: Whitebelyash (O patch A830)
 hacks_repo="https://github.com/whitebelyash/mesa-tu8.git"
 hacks_branch="gen8-hacks"
 
@@ -63,7 +63,7 @@ prepare_source(){
 	git clone --branch "$base_branch" "$base_repo" mesa
 	cd mesa
 
-    # Configura Git (necessário para o merge)
+    # Configura identidade para o merge
     git config user.email "ci@turnip.builder"
     git config user.name "Turnip CI Builder"
 
@@ -73,10 +73,9 @@ prepare_source(){
     git fetch hacks "$hacks_branch"
     
     echo "Attempting FORCE MERGE (Strategy: -X theirs)..."
-    # -X theirs = Em caso de conflito, o código do Hack vence o código do Rob Clark.
-    # --allow-unrelated-histories = Força o merge mesmo se os repos forem muito diferentes
+    # Tenta o merge forçando a aceitação dos hacks em caso de conflito
     git merge --no-edit -X theirs "hacks/$hacks_branch" --allow-unrelated-histories || {
-        echo -e "${red}CRITICAL: Force merge failed anyway. The code structure is too different.${nocolor}"
+        echo -e "${red}CRITICAL: Force merge failed. Code structure is too different.${nocolor}"
         exit 1
     }
 
@@ -111,7 +110,7 @@ compile_mesa(){
 
 	local cross_file="$source_dir/android-aarch64-crossfile.txt"
     
-    # Sem pkg-config para evitar libelf error
+    # Sem pkg-config para evitar libelf
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
@@ -134,6 +133,7 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
+    # CORREÇÃO APLICADA AQUI: libarchive removido
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -148,7 +148,6 @@ EOF
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
         -Dzstd=disabled \
-        -Dlibarchive=disabled \
         --force-fallback-for=spirv-tools,spirv-headers \
 		2>&1 | tee "$workdir/meson_log"
 
