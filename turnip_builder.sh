@@ -8,11 +8,11 @@ workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 sdkver="35"
 
-# 1. BASE: Rob Clark (O mais atualizado possível)
+# 1. BASE: Rob Clark (Mais recente possível)
 base_repo="https://gitlab.freedesktop.org/robclark/mesa.git"
 base_branch="tu/gen8"
 
-# 2. HACKS: Whitebelyash (O que tem o suporte A830)
+# 2. HACKS: Whitebelyash (O patch)
 hacks_repo="https://github.com/whitebelyash/mesa-tu8.git"
 hacks_branch="gen8-hacks"
 
@@ -58,28 +58,29 @@ prepare_source(){
 	cd "$workdir"
 	if [ -d mesa ]; then rm -rf mesa; fi
 	
-    # 1. Clona o Rob Clark Oficial
+    # 1. Clona a base Rob Clark
     echo "Cloning Base: $base_repo ($base_branch)..."
 	git clone --branch "$base_branch" "$base_repo" mesa
 	cd mesa
 
-    # Configura identidade para poder fazer o merge
+    # Configura Git (necessário para o merge)
     git config user.email "ci@turnip.builder"
     git config user.name "Turnip CI Builder"
 
-    # 2. Adiciona o Whitebelyash como uma fonte extra e faz o Merge
+    # 2. Traz os hacks
     echo "Fetching Hacks from: $hacks_repo..."
     git remote add hacks "$hacks_repo"
     git fetch hacks "$hacks_branch"
     
-    echo "Merging Hacks into Base..."
-    # Tenta misturar o código. Se der conflito, o script para aqui.
-    git merge --no-edit "hacks/$hacks_branch" || {
-        echo -e "${red}MERGE CONFLICT! Rob Clark changed files that hacks use. Cannot build automatically.${nocolor}"
+    echo "Attempting FORCE MERGE (Strategy: -X theirs)..."
+    # -X theirs = Em caso de conflito, o código do Hack vence o código do Rob Clark.
+    # --allow-unrelated-histories = Força o merge mesmo se os repos forem muito diferentes
+    git merge --no-edit -X theirs "hacks/$hacks_branch" --allow-unrelated-histories || {
+        echo -e "${red}CRITICAL: Force merge failed anyway. The code structure is too different.${nocolor}"
         exit 1
     }
 
-    # --- CORREÇÃO SPIRV ---
+    # --- SPIRV Manual ---
     echo "Manually cloning dependencies to subprojects..."
     mkdir -p subprojects
     cd subprojects
@@ -110,6 +111,7 @@ compile_mesa(){
 
 	local cross_file="$source_dir/android-aarch64-crossfile.txt"
     
+    # Sem pkg-config para evitar libelf error
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
@@ -132,7 +134,6 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # Meson Setup Blindado
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -174,19 +175,19 @@ package_driver(){
 	mv lib_temp.so "vulkan.ad07XX.so"
 
 	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-Gen8-Merged-${short_hash}"
+	local meta_name="Turnip-BleedingEdge-${short_hash}"
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Turnip Gen8 (RobClark Base + Whitebelyash Hacks). Commit $short_hash",
+  "description": "Turnip Bleeding Edge (RobClark) + Forced Hacks. Commit $short_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-	local zip_name="Turnip-Gen8-Merged-${short_hash}.zip"
+	local zip_name="Turnip-BleedingEdge-${short_hash}.zip"
 	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
 	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
 }
@@ -197,14 +198,14 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Turnip-Gen8-${date_tag}-${short_hash}" > tag
-    echo "Turnip Gen8 (Auto-Merge) - ${date_tag}" > release
+    echo "Turnip-BleedingEdge-${date_tag}-${short_hash}" > tag
+    echo "Turnip Bleeding Edge (Forced Hacks) - ${date_tag}" > release
 
-    echo "Automated Turnip Build merging RobClark(Upstream) and Whitebelyash(Hacks)." > description
+    echo "Automated Turnip Build. Strategy: RobClark Base + Forced Whitebelyash Hacks." > description
     echo "" >> description
     echo "### Build Details:" >> description
-    echo "**Base:** robclark/mesa (Branch: tu/gen8)" >> description
-    echo "**Hacks:** Merged from whitebelyash/mesa-tu8 (gen8-hacks)" >> description
+    echo "**Base:** robclark/mesa (tu/gen8)" >> description
+    echo "**Hacks:** Forced merge from whitebelyash/mesa-tu8" >> description
     echo "**Commit:** [${short_hash}](${base_repo%.git}/commit/${commit_hash})" >> description
 }
 
