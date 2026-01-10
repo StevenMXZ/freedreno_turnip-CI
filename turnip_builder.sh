@@ -55,14 +55,23 @@ prepare_source(){
 	
     # Clone do repositório específico
     echo "Cloning from $mesa_repo branch $mesa_branch..."
-	git clone "$mesa_repo" mesa
+	git clone --depth=1 --branch "$mesa_branch" "$mesa_repo" mesa
 	cd mesa
-    git checkout "$mesa_branch"
 
-    # --- CORREÇÃO DO ERRO SPIRV ---
-    # Força o download de todas as dependências internas (wraps) antes de compilar
-    echo "Downloading subprojects (spirv-tools, etc)..."
-    meson subprojects download
+    # --- CORREÇÃO DO ERRO SPIRV (MANUAL) ---
+    echo "Manually cloning dependencies to subprojects..."
+    mkdir -p subprojects
+    cd subprojects
+    
+    # Remove versões antigas se existirem
+    rm -rf spirv-tools spirv-headers
+    
+    # Clona dependências essenciais
+    # Usamos depth=1 para ser rápido e pegar a versão mais recente compatível
+    git clone --depth=1 https://github.com/KhronosGroup/SPIRV-Tools.git spirv-tools
+    git clone --depth=1 https://github.com/KhronosGroup/SPIRV-Headers.git spirv-headers
+    
+    cd .. # Volta para a raiz do mesa
     
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -108,7 +117,7 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # Adicionado --force-fallback-for=spirv-tools para garantir que use a versão interna
+    # --force-fallback-for garante que o Meson use as pastas que clonamos manualmente
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -123,7 +132,8 @@ EOF
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
         -Dzstd=disabled \
-        --force-fallback-for=spirv-tools \
+        -Dlibarchive=disabled \
+        --force-fallback-for=spirv-tools,spirv-headers \
 		2>&1 | tee "$workdir/meson_log"
 
 	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
