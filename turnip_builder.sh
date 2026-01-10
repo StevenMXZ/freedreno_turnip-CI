@@ -63,10 +63,10 @@ prepare_source(){
     mkdir -p subprojects
     cd subprojects
     
-    # Remove versões antigas se existirem e baixa novas
+    # Remove versões antigas e baixa novas
     rm -rf spirv-tools spirv-headers
     
-    # Clona dependências essenciais (versão mais recente compatível)
+    # Clona dependências essenciais
     git clone --depth=1 https://github.com/KhronosGroup/SPIRV-Tools.git spirv-tools
     git clone --depth=1 https://github.com/KhronosGroup/SPIRV-Headers.git spirv-headers
     
@@ -116,8 +116,7 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # REMOVIDO: -Dlibarchive=disabled (Isso corrigiu o erro "Unknown option")
-    # MANTIDO: --force-fallback-for para usar os subprojetos que baixamos manualmente
+    # CORREÇÃO: -Dlibelf=disabled adicionado
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -132,6 +131,7 @@ EOF
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
         -Dzstd=disabled \
+        -Dlibelf=disabled \
         --force-fallback-for=spirv-tools,spirv-headers \
 		2>&1 | tee "$workdir/meson_log"
 
