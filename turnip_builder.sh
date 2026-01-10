@@ -6,7 +6,7 @@ nocolor='\033[0m'
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
-sdkver="35"
+sdkver="36"
 
 # 1. BASE: Rob Clark (Mais recente possível)
 base_repo="https://gitlab.freedesktop.org/robclark/mesa.git"
