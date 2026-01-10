@@ -9,18 +9,28 @@ jobs:
   build_and_release:
     name: Build and Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Permissão necessária para criar Releases
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Prepare Environment
         run: |
-          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+          # Adiciona repositórios source (deb-src) de forma segura para Ubuntu 24.04+
+          sudo cp /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources.bak
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources || echo "Aviso: Falha ao editar ubuntu.sources, tentando método alternativo..."
+          
           sudo apt-get update
+          
           # Dependências críticas
           sudo apt-get install -y libssl-dev libzstd-dev libarchive-dev python3-mako python3-pip flex bison graphviz
+          
+          # Instala dependências de build do Mesa
           sudo apt-get build-dep mesa -y
-          pip install --upgrade meson ninja
+          
+          # Garante ferramentas de build atualizadas
+          pip install --break-system-packages --upgrade meson ninja
 
       - name: Execute Build Script
         run: bash ./turnip_builder.sh
@@ -30,7 +40,8 @@ jobs:
         run: |
           echo "RELEASE_NAME=$(cat turnip_workdir/release)" >> "$GITHUB_OUTPUT"
           echo "TAG_NAME=$(cat turnip_workdir/tag)" >> "$GITHUB_OUTPUT"
-          echo "BODY_PATH=turnip_workdir/description" >> "$GITHUB_OUTPUT"
+          # Usa caminho absoluto para evitar erros se o diretório de trabalho mudar
+          echo "BODY_PATH=$(pwd)/turnip_workdir/description" >> "$GITHUB_OUTPUT"
 
       - name: Upload Logs
         if: always()
