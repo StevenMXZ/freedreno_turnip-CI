@@ -58,6 +58,11 @@ prepare_source(){
 	git clone "$mesa_repo" mesa
 	cd mesa
     git checkout "$mesa_branch"
+
+    # --- CORREÇÃO DO ERRO SPIRV ---
+    # Força o download de todas as dependências internas (wraps) antes de compilar
+    echo "Downloading subprojects (spirv-tools, etc)..."
+    meson subprojects download
     
 	commit_hash=$(git rev-parse HEAD)
 	if [ -f VERSION ]; then
@@ -103,9 +108,7 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # Opções removidas para corrigir erros:
-    # -Dlibarchive=disabled (Causava "Unknown option")
-    # -Dshared-glapi=enabled (Causava "Deprecation warning")
+    # Adicionado --force-fallback-for=spirv-tools para garantir que use a versão interna
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -120,6 +123,7 @@ EOF
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
         -Dzstd=disabled \
+        --force-fallback-for=spirv-tools \
 		2>&1 | tee "$workdir/meson_log"
 
 	ninja -C "$build_dir" 2>&1 | tee "$workdir/ninja_log"
