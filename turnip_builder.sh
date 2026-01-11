@@ -8,18 +8,18 @@ nocolor='\033[0m'
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 
-
+# --- CONFIGURAÇÃO ---
 ndkver="android-ndk-r28"
 target_sdk="36"
 
-
+# REPOSITÓRIOS
 base_repo="https://gitlab.freedesktop.org/robclark/mesa.git"
 base_branch="tu/gen8"
 
 hacks_repo="https://github.com/whitebelyash/mesa-tu8.git"
 hacks_branch="gen8-hacks"
 
-
+# Commit que quebra o DXVK (Vamos reverter ele no final)
 bad_commit="2f0ea1c6"
 
 commit_hash=""
@@ -59,7 +59,7 @@ prepare_source(){
 	cd "$workdir"
 	if [ -d mesa ]; then rm -rf mesa; fi
 	
-    
+    # 1. Clona BASE (Rob Clark)
     echo "Cloning Base: $base_repo ($base_branch)..."
 	git clone --branch "$base_branch" "$base_repo" mesa
 	cd mesa
@@ -67,37 +67,51 @@ prepare_source(){
     git config user.email "ci@turnip.builder"
     git config user.name "Turnip CI Builder"
 
-    
+    # 2. Prepara os HACKS (Whitebelyash)
     echo "Fetching Hacks from: $hacks_repo..."
     git remote add hacks "$hacks_repo"
     git fetch hacks "$hacks_branch"
     
-    
-    echo "Attempting Merge..."
-    
+    # 3. SMART MERGE
+    echo "Attempting Merge Hacks..."
     if ! git merge --no-edit "hacks/$hacks_branch" --allow-unrelated-histories; then
         echo -e "${red}Merge Conflict detected! Resolving intelligently...${nocolor}"
-        
-        
-        
         git checkout --theirs .
         git add .
-        
-        
         git commit -m "Auto-resolved conflicts by accepting Hacks"
         echo -e "${green}Conflicts resolved. Hacks applied successfully.${nocolor}"
     fi
 
-    
-    echo -e "${green}Attempting to REVERT commit $bad_commit (Enable GS/Tess)...${nocolor}"
+    # 4. APLICANDO MRs EXTRAS
+    # MR !38582
+    echo -e "${green}Fetching & Merging MR !38582 (Legacy Vertex)...${nocolor}"
+    git fetch https://gitlab.freedesktop.org/mesa/mesa.git merge-requests/38582/head:mr-38582
+    if ! git merge --no-edit mr-38582; then
+        echo -e "${red}Conflict in MR 38582. Forcing merge...${nocolor}"
+        git checkout --theirs .
+        git add .
+        git commit -m "Force merge MR 38582"
+    fi
+
+    # MR !39254
+    echo -e "${green}Fetching & Merging MR !39254 (Generated Commands)...${nocolor}"
+    git fetch https://gitlab.freedesktop.org/mesa/mesa.git merge-requests/39254/head:mr-39254
+    if ! git merge --no-edit mr-39254; then
+        echo -e "${red}Conflict in MR 39254. Forcing merge...${nocolor}"
+        git checkout --theirs .
+        git add .
+        git commit -m "Force merge MR 39254"
+    fi
+
+    # 5. REVERT DO COMMIT QUE MATA O DXVK
+    echo -e "${green}Attempting to REVERT commit $bad_commit (Fix DXVK)...${nocolor}"
     
     if git revert --no-edit "$bad_commit"; then
         echo -e "${green}SUCCESS: Reverted GS/Tess disable! DXVK should work.${nocolor}"
     else
-        echo -e "${red}Git revert failed (hash changed?). Trying manual SED patch...${nocolor}"
+        echo -e "${red}Git revert failed. Applying manual SED patch...${nocolor}"
         git revert --abort || true
-        
-        
+        # Remove a verificação "&& chip != 8"
         find src/freedreno/vulkan -name "*.cc" -print0 | xargs -0 sed -i 's/ && (pdevice->info->chip != 8)//g'
         find src/freedreno/vulkan -name "*.cc" -print0 | xargs -0 sed -i 's/ && (pdevice->info->chip == 8)//g'
         echo "Applied manual patch via SED to enable GS/Tess."
@@ -113,7 +127,12 @@ prepare_source(){
     cd .. 
     
 	commit_hash=$(git rev-parse HEAD)
-	version_str="API36-RobClark-Latest"
+    # Tenta pegar versão do arquivo VERSION, se não, usa git hash
+    if [ -f VERSION ]; then
+	    version_str=$(cat VERSION | xargs)
+	else
+	    version_str="git-${commit_hash:0:7}"
+	fi
 	cd "$workdir"
 }
 
@@ -125,7 +144,7 @@ compile_mesa(){
 	local ndk_bin_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-    
+    # Fallback compilador
     local compiler_ver="35"
     if [ ! -f "$ndk_bin_path/aarch64-linux-android${compiler_ver}-clang" ]; then compiler_ver="34"; fi
     echo "Using compiler binary: $compiler_ver (Targeting API $target_sdk)"
@@ -151,7 +170,6 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # Opções limpas e SPIRV forçado
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -188,24 +206,31 @@ package_driver(){
 	cp "$lib_path" "$package_temp/lib_temp.so"
 
 	cd "$package_temp"
+    
+    # 1. Renomeia para vulkan.adreno.so (como pedido no JSON)
+    echo "Patching SONAME..."
 	patchelf --set-soname "vulkan.adreno.so" lib_temp.so
-	mv lib_temp.so "vulkan.ad07XX.so"
+	mv lib_temp.so "vulkan.adreno.so"
 
 	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-A830-DXVK-${short_hash}"
+    
+    # 2. Gera o JSON no formato solicitado
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
-  "name": "$meta_name",
-  "description": "Turnip Gen8 (Bleeding Edge + DXVK Fix) - SDK 36. Commit $short_hash",
-  "author": "mesa-ci",
-  "driverVersion": "$version_str",
-  "libraryName": "vulkan.ad07XX.so"
+  "name": "Mesa Turnip A830 v7 ($short_hash)",
+  "description": "Compiled from Source. RobClark Base + Hacks + MR 38582/39254 + DXVK Fix. SDK 36.",
+  "author": "Turnip CI",
+  "packageVersion": "1",
+  "vendor": "Mesa",
+  "driverVersion": "Vulkan 1.4 (Mesa $version_str)",
+  "minApi": 27,
+  "libraryName": "vulkan.adreno.so"
 }
 EOF
 
-	local zip_name="Turnip-A830-DXVK-${short_hash}.zip"
-	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
+	local zip_name="Turnip-A830-Custom-${short_hash}.zip"
+	zip -9 "$workdir/$zip_name" "vulkan.adreno.so" meta.json
 	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
 }
 
@@ -215,9 +240,9 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Turnip-DXVK-${date_tag}-${short_hash}" > tag
-    echo "Turnip A830 (DXVK Fix) - ${date_tag}" > release
-    echo "Automated Turnip Build. Features: SDK 36, Smart Merge (RobClark Latest), Reverted GS/Tess Disable." > description
+    echo "Turnip-A830-v7-${date_tag}-${short_hash}" > tag
+    echo "Turnip A830 (Custom v7) - ${date_tag}" > release
+    echo "Automated Turnip Build. SDK 36, DXVK Fix, MRs included." > description
 }
 
 check_deps
