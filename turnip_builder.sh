@@ -8,18 +8,18 @@ nocolor='\033[0m'
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 
-# --- CONFIGURAÇÃO ---
+
 ndkver="android-ndk-r28"
 target_sdk="36"
 
-# REPOSITÓRIOS
+
 base_repo="https://gitlab.freedesktop.org/robclark/mesa.git"
 base_branch="tu/gen8"
 
 hacks_repo="https://github.com/whitebelyash/mesa-tu8.git"
 hacks_branch="gen8-hacks"
 
-# Commit que quebra o DXVK (Vamos reverter ele)
+
 bad_commit="2f0ea1c6"
 
 commit_hash=""
@@ -59,7 +59,7 @@ prepare_source(){
 	cd "$workdir"
 	if [ -d mesa ]; then rm -rf mesa; fi
 	
-    # 1. Clona BASE (Rob Clark - Último Commit)
+    
     echo "Cloning Base: $base_repo ($base_branch)..."
 	git clone --branch "$base_branch" "$base_repo" mesa
 	cd mesa
@@ -67,28 +67,28 @@ prepare_source(){
     git config user.email "ci@turnip.builder"
     git config user.name "Turnip CI Builder"
 
-    # 2. Prepara os HACKS
+    
     echo "Fetching Hacks from: $hacks_repo..."
     git remote add hacks "$hacks_repo"
     git fetch hacks "$hacks_branch"
     
-    # 3. SMART MERGE (Resolve conflitos automaticamente)
+    
     echo "Attempting Merge..."
-    # Tenta o merge. Se falhar, entra no bloco || (OR) para resolver.
+    
     if ! git merge --no-edit "hacks/$hacks_branch" --allow-unrelated-histories; then
         echo -e "${red}Merge Conflict detected! Resolving intelligently...${nocolor}"
         
-        # Para cada arquivo em conflito, forçamos a versão do HACK (Theirs)
-        # Isso garante que a definição do A830 e os hacks entrem, sobrescrevendo o Rob Clark apenas onde necessário.
+        
+        
         git checkout --theirs .
         git add .
         
-        # Finaliza o merge com os arquivos corrigidos
+        
         git commit -m "Auto-resolved conflicts by accepting Hacks"
         echo -e "${green}Conflicts resolved. Hacks applied successfully.${nocolor}"
     fi
 
-    # 4. REVERT DO COMMIT QUE MATA O DXVK
+    
     echo -e "${green}Attempting to REVERT commit $bad_commit (Enable GS/Tess)...${nocolor}"
     
     if git revert --no-edit "$bad_commit"; then
@@ -96,8 +96,8 @@ prepare_source(){
     else
         echo -e "${red}Git revert failed (hash changed?). Trying manual SED patch...${nocolor}"
         git revert --abort || true
-        # Se o revert falhar, usamos SED para apagar a verificação "&& chip != 8"
-        # Isso reativa Geometry e Tessellation no código fonte na força bruta
+        
+        
         find src/freedreno/vulkan -name "*.cc" -print0 | xargs -0 sed -i 's/ && (pdevice->info->chip != 8)//g'
         find src/freedreno/vulkan -name "*.cc" -print0 | xargs -0 sed -i 's/ && (pdevice->info->chip == 8)//g'
         echo "Applied manual patch via SED to enable GS/Tess."
@@ -125,7 +125,7 @@ compile_mesa(){
 	local ndk_bin_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-    # Fallback compilador (35 se 36 não existir)
+    
     local compiler_ver="35"
     if [ ! -f "$ndk_bin_path/aarch64-linux-android${compiler_ver}-clang" ]; then compiler_ver="34"; fi
     echo "Using compiler binary: $compiler_ver (Targeting API $target_sdk)"
