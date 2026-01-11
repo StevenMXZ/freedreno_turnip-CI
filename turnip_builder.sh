@@ -8,17 +8,18 @@ nocolor='\033[0m'
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 
-# --- CONFIGURAÇÃO EXTREMA ---
-# Usamos NDK r28 (Stable Latest) para suporte máximo
+# --- CONFIGURAÇÃO: SDK 36 + NDK r28 ---
 ndkver="android-ndk-r28"
-# ALVO: Android 16 (API 36)
-target_sdk="36" 
+target_sdk="36"
 
 # REPOSITÓRIOS
 base_repo="https://gitlab.freedesktop.org/robclark/mesa.git"
 base_branch="tu/gen8"
 hacks_repo="https://github.com/whitebelyash/mesa-tu8.git"
 hacks_branch="gen8-hacks"
+
+# COMMIT QUE QUEBRA O DXVK (Disable GS/tess)
+bad_commit="2f0ea1c6"
 
 commit_hash=""
 version_str=""
@@ -57,12 +58,12 @@ prepare_source(){
 	cd "$workdir"
 	if [ -d mesa ]; then rm -rf mesa; fi
 	
-    # 1. Clona BASE (Rob Clark Recente)
+    # 1. Clona BASE (Rob Clark)
     echo "Cloning Base: $base_repo ($base_branch)..."
 	git clone --branch "$base_branch" "$base_repo" mesa
 	cd mesa
 
-    # Configura Git Identity para o merge
+    # Configura Git para permitir merge e revert
     git config user.email "ci@turnip.builder"
     git config user.name "Turnip CI Builder"
 
@@ -72,14 +73,33 @@ prepare_source(){
     git fetch hacks "$hacks_branch"
     
     echo "Attempting FORCE MERGE (-X theirs)..."
-    # Tenta fundir. Se der conflito, o código do Hack VENCE (theirs).
     git merge --no-edit -X theirs "hacks/$hacks_branch" --allow-unrelated-histories || {
-        echo -e "${red}Merge failed critically. Continuing might produce broken code.${nocolor}"
+        echo -e "${red}Merge conflict critical. Exiting to avoid bad build.${nocolor}"
         exit 1
     }
 
-    # --- SPIRV Manual (Obrigatório) ---
-    echo "Manually cloning dependencies to subprojects..."
+    # --- NOVO: REVERT PARA CORRIGIR DXVK ---
+    # Reverte o commit que desativa Geometry/Tessellation Shaders
+    echo -e "${green}Attempting to REVERT commit $bad_commit (Fix DXVK)...${nocolor}"
+    
+    # Tenta reverter pelo hash exato. Se falhar (hash mudou), tenta achar pelo nome.
+    if git revert --no-edit "$bad_commit"; then
+        echo -e "${green}Successfully reverted $bad_commit! GS/TS enabled.${nocolor}"
+    else
+        echo -e "${red}Hash revert failed. Searching by commit message...${nocolor}"
+        # Procura o hash atual caso tenha mudado no rebase
+        ALT_HASH=$(git log --all --grep="HACK: tu: Disable GS/tess" --format=%H -n 1)
+        if [ -n "$ALT_HASH" ]; then
+             echo "Found commit at $ALT_HASH. Reverting..."
+             git revert --no-edit "$ALT_HASH"
+        else
+             echo -e "${red}CRITICAL: Could not find the Disable GS/tess commit. DXVK might fail.${nocolor}"
+             # Não damos exit 1 aqui para tentar compilar mesmo assim
+        fi
+    fi
+
+    # --- SPIRV Manual ---
+    echo "Manually cloning dependencies..."
     mkdir -p subprojects
     cd subprojects
     rm -rf spirv-tools spirv-headers
@@ -88,7 +108,7 @@ prepare_source(){
     cd .. 
     
 	commit_hash=$(git rev-parse HEAD)
-	version_str="API36-BleedingEdge"
+	version_str="API36-DXVK-Fix"
 	cd "$workdir"
 }
 
@@ -97,22 +117,15 @@ compile_mesa(){
 
 	local source_dir="$workdir/mesa"
 	local build_dir="$source_dir/build"
-	
-	local ndk_root_path="$ANDROID_NDK_HOME"
-	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
-	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+	local ndk_bin_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+	local ndk_sysroot_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-    # --- TRUQUE DO COMPILADOR (Fix para "No such file") ---
-    # O binário android36-clang geralmente não existe ainda.
-    # Usamos o 35 ou 34 como binário, mas o Meson vai usar a flag -Dplatform-sdk-version=36
+    # Fallback inteligente para o compilador (35 se 36 n existir)
     local compiler_ver="35"
-    if [ ! -f "$ndk_bin_path/aarch64-linux-android${compiler_ver}-clang" ]; then
-        compiler_ver="34" # Fallback garantido
-    fi
-    echo "Using compiler binary version: $compiler_ver (Targeting API $target_sdk)"
+    if [ ! -f "$ndk_bin_path/aarch64-linux-android${compiler_ver}-clang" ]; then compiler_ver="34"; fi
+    echo "Using compiler binary: $compiler_ver (Targeting API $target_sdk)"
 
 	local cross_file="$source_dir/android-aarch64-crossfile.txt"
-    
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
@@ -130,12 +143,10 @@ endian = 'little'
 EOF
 
 	cd "$source_dir"
-
-	export LIBRT_LIBS=""
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # CORREÇÃO APLICADA: -Dlibarchive=disabled REMOVIDO
+    # Sem libarchive (correção anterior) + Force Fallback SPIRV
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -176,19 +187,19 @@ package_driver(){
 	mv lib_temp.so "vulkan.ad07XX.so"
 
 	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-A830-SDK36-${short_hash}"
+	local meta_name="Turnip-A830-DXVK-${short_hash}"
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Turnip Gen8 (Bleeding Edge + Force Hacks) - SDK 36. Commit $short_hash",
+  "description": "Turnip Gen8 (Bleeding Edge + Hacks + Revert GS/Tess for DXVK). Commit $short_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-	local zip_name="Turnip-A830-SDK36-${short_hash}.zip"
+	local zip_name="Turnip-A830-DXVK-${short_hash}.zip"
 	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
 	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
 }
@@ -199,9 +210,9 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Turnip-A830-SDK36-${date_tag}-${short_hash}" > tag
-    echo "Turnip A830 (SDK 36) - ${date_tag}" > release
-    echo "Automated Turnip Build. Strategy: RobClark Base + Forced Hacks + SDK 36." > description
+    echo "Turnip-DXVK-${date_tag}-${short_hash}" > tag
+    echo "Turnip A830 (DXVK Fix) - ${date_tag}" > release
+    echo "Automated Turnip Build. Features: SDK 36, Force Merge, Reverted GS/Tess Disable." > description
 }
 
 check_deps
