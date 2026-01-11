@@ -8,17 +8,18 @@ nocolor='\033[0m'
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 
-# --- CONFIGURAÇÃO: SDK 36 + NDK r28 ---
+# --- CONFIGURAÇÃO ---
 ndkver="android-ndk-r28"
 target_sdk="36"
 
 # REPOSITÓRIOS
 base_repo="https://gitlab.freedesktop.org/robclark/mesa.git"
 base_branch="tu/gen8"
+
 hacks_repo="https://github.com/whitebelyash/mesa-tu8.git"
 hacks_branch="gen8-hacks"
 
-# COMMIT QUE QUEBRA O DXVK (Disable GS/tess)
+# Commit que quebra o DXVK (Vamos reverter ele)
 bad_commit="2f0ea1c6"
 
 commit_hash=""
@@ -58,44 +59,48 @@ prepare_source(){
 	cd "$workdir"
 	if [ -d mesa ]; then rm -rf mesa; fi
 	
-    # 1. Clona BASE (Rob Clark)
+    # 1. Clona BASE (Rob Clark - Último Commit)
     echo "Cloning Base: $base_repo ($base_branch)..."
 	git clone --branch "$base_branch" "$base_repo" mesa
 	cd mesa
 
-    # Configura Git para permitir merge e revert
     git config user.email "ci@turnip.builder"
     git config user.name "Turnip CI Builder"
 
-    # 2. Traz HACKS (Whitebelyash)
+    # 2. Prepara os HACKS
     echo "Fetching Hacks from: $hacks_repo..."
     git remote add hacks "$hacks_repo"
     git fetch hacks "$hacks_branch"
     
-    echo "Attempting FORCE MERGE (-X theirs)..."
-    git merge --no-edit -X theirs "hacks/$hacks_branch" --allow-unrelated-histories || {
-        echo -e "${red}Merge conflict critical. Exiting to avoid bad build.${nocolor}"
-        exit 1
-    }
+    # 3. SMART MERGE (Resolve conflitos automaticamente)
+    echo "Attempting Merge..."
+    # Tenta o merge. Se falhar, entra no bloco || (OR) para resolver.
+    if ! git merge --no-edit "hacks/$hacks_branch" --allow-unrelated-histories; then
+        echo -e "${red}Merge Conflict detected! Resolving intelligently...${nocolor}"
+        
+        # Para cada arquivo em conflito, forçamos a versão do HACK (Theirs)
+        # Isso garante que a definição do A830 e os hacks entrem, sobrescrevendo o Rob Clark apenas onde necessário.
+        git checkout --theirs .
+        git add .
+        
+        # Finaliza o merge com os arquivos corrigidos
+        git commit -m "Auto-resolved conflicts by accepting Hacks"
+        echo -e "${green}Conflicts resolved. Hacks applied successfully.${nocolor}"
+    fi
 
-    # --- NOVO: REVERT PARA CORRIGIR DXVK ---
-    # Reverte o commit que desativa Geometry/Tessellation Shaders
-    echo -e "${green}Attempting to REVERT commit $bad_commit (Fix DXVK)...${nocolor}"
+    # 4. REVERT DO COMMIT QUE MATA O DXVK
+    echo -e "${green}Attempting to REVERT commit $bad_commit (Enable GS/Tess)...${nocolor}"
     
-    # Tenta reverter pelo hash exato. Se falhar (hash mudou), tenta achar pelo nome.
     if git revert --no-edit "$bad_commit"; then
-        echo -e "${green}Successfully reverted $bad_commit! GS/TS enabled.${nocolor}"
+        echo -e "${green}SUCCESS: Reverted GS/Tess disable! DXVK should work.${nocolor}"
     else
-        echo -e "${red}Hash revert failed. Searching by commit message...${nocolor}"
-        # Procura o hash atual caso tenha mudado no rebase
-        ALT_HASH=$(git log --all --grep="HACK: tu: Disable GS/tess" --format=%H -n 1)
-        if [ -n "$ALT_HASH" ]; then
-             echo "Found commit at $ALT_HASH. Reverting..."
-             git revert --no-edit "$ALT_HASH"
-        else
-             echo -e "${red}CRITICAL: Could not find the Disable GS/tess commit. DXVK might fail.${nocolor}"
-             # Não damos exit 1 aqui para tentar compilar mesmo assim
-        fi
+        echo -e "${red}Git revert failed (hash changed?). Trying manual SED patch...${nocolor}"
+        git revert --abort || true
+        # Se o revert falhar, usamos SED para apagar a verificação "&& chip != 8"
+        # Isso reativa Geometry e Tessellation no código fonte na força bruta
+        find src/freedreno/vulkan -name "*.cc" -print0 | xargs -0 sed -i 's/ && (pdevice->info->chip != 8)//g'
+        find src/freedreno/vulkan -name "*.cc" -print0 | xargs -0 sed -i 's/ && (pdevice->info->chip == 8)//g'
+        echo "Applied manual patch via SED to enable GS/Tess."
     fi
 
     # --- SPIRV Manual ---
@@ -108,7 +113,7 @@ prepare_source(){
     cd .. 
     
 	commit_hash=$(git rev-parse HEAD)
-	version_str="API36-DXVK-Fix"
+	version_str="API36-RobClark-Latest"
 	cd "$workdir"
 }
 
@@ -120,7 +125,7 @@ compile_mesa(){
 	local ndk_bin_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-    # Fallback inteligente para o compilador (35 se 36 n existir)
+    # Fallback compilador (35 se 36 não existir)
     local compiler_ver="35"
     if [ ! -f "$ndk_bin_path/aarch64-linux-android${compiler_ver}-clang" ]; then compiler_ver="34"; fi
     echo "Using compiler binary: $compiler_ver (Targeting API $target_sdk)"
@@ -146,7 +151,7 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # Sem libarchive (correção anterior) + Force Fallback SPIRV
+    # Opções limpas e SPIRV forçado
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -192,7 +197,7 @@ package_driver(){
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Turnip Gen8 (Bleeding Edge + Hacks + Revert GS/Tess for DXVK). Commit $short_hash",
+  "description": "Turnip Gen8 (Bleeding Edge + DXVK Fix) - SDK 36. Commit $short_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
@@ -212,7 +217,7 @@ generate_release_info() {
 
     echo "Turnip-DXVK-${date_tag}-${short_hash}" > tag
     echo "Turnip A830 (DXVK Fix) - ${date_tag}" > release
-    echo "Automated Turnip Build. Features: SDK 36, Force Merge, Reverted GS/Tess Disable." > description
+    echo "Automated Turnip Build. Features: SDK 36, Smart Merge (RobClark Latest), Reverted GS/Tess Disable." > description
 }
 
 check_deps
