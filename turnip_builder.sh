@@ -9,7 +9,7 @@ deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
 
 # --- CONFIGURAÇÃO EXTREMA ---
-# Usamos NDK r28 (Stable Latest)
+# Usamos NDK r28 (Stable Latest) para suporte máximo
 ndkver="android-ndk-r28"
 # ALVO: Android 16 (API 36)
 target_sdk="36" 
@@ -45,7 +45,6 @@ prepare_ndk(){
 	cd "$workdir"
 	if [ ! -d "$ndkver" ]; then
 		echo "Downloading Android NDK $ndkver..."
-        # Link oficial do NDK r28 (Linux)
 		curl -L "https://dl.google.com/android/repository/${ndkver}-linux.zip" --output "${ndkver}-linux.zip" &> /dev/null
 		echo "Extracting NDK..."
 		unzip -q "${ndkver}-linux.zip" &> /dev/null
@@ -73,13 +72,13 @@ prepare_source(){
     git fetch hacks "$hacks_branch"
     
     echo "Attempting FORCE MERGE (-X theirs)..."
-    # Tenta fundir. Se der conflito, o código do Hack vence.
+    # Tenta fundir. Se der conflito, o código do Hack VENCE (theirs).
     git merge --no-edit -X theirs "hacks/$hacks_branch" --allow-unrelated-histories || {
         echo -e "${red}Merge failed critically. Continuing might produce broken code.${nocolor}"
         exit 1
     }
 
-    # --- SPIRV Manual ---
+    # --- SPIRV Manual (Obrigatório) ---
     echo "Manually cloning dependencies to subprojects..."
     mkdir -p subprojects
     cd subprojects
@@ -103,12 +102,12 @@ compile_mesa(){
 	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-    # --- TRUQUE DO COMPILADOR ---
-    # Se android36-clang não existir, usamos o 35 ou 34, mas o Meson vai mirar no 36.
-    # Isso resolve o erro "No such file"
+    # --- TRUQUE DO COMPILADOR (Fix para "No such file") ---
+    # O binário android36-clang geralmente não existe ainda.
+    # Usamos o 35 ou 34 como binário, mas o Meson vai usar a flag -Dplatform-sdk-version=36
     local compiler_ver="35"
     if [ ! -f "$ndk_bin_path/aarch64-linux-android${compiler_ver}-clang" ]; then
-        compiler_ver="34" # Fallback se for um NDK mais antigo
+        compiler_ver="34" # Fallback garantido
     fi
     echo "Using compiler binary version: $compiler_ver (Targeting API $target_sdk)"
 
@@ -136,6 +135,7 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
+    # CORREÇÃO APLICADA: -Dlibarchive=disabled REMOVIDO
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
@@ -150,7 +150,6 @@ EOF
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
         -Dzstd=disabled \
-        -Dlibarchive=disabled \
         --force-fallback-for=spirv-tools,spirv-headers \
 		2>&1 | tee "$workdir/meson_log"
 
