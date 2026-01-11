@@ -1,18 +1,22 @@
 #!/bin/bash -e
+set -o pipefail
+
 green='\033[0;32m'
 red='\033[0;31m'
 nocolor='\033[0m'
 
 deps="meson ninja patchelf unzip curl pip flex bison zip git"
 workdir="$(pwd)/turnip_workdir"
-ndkver="android-ndk-r29"
-sdkver="36"
 
-# 1. BASE: Rob Clark (Mais recente possível)
+# --- CONFIGURAÇÃO EXTREMA ---
+# Usamos NDK r28 (Stable Latest)
+ndkver="android-ndk-r28"
+# ALVO: Android 16 (API 36)
+target_sdk="36" 
+
+# REPOSITÓRIOS
 base_repo="https://gitlab.freedesktop.org/robclark/mesa.git"
 base_branch="tu/gen8"
-
-# 2. HACKS: Whitebelyash (O patch A830)
 hacks_repo="https://github.com/whitebelyash/mesa-tu8.git"
 hacks_branch="gen8-hacks"
 
@@ -36,21 +40,17 @@ check_deps(){
 }
 
 prepare_ndk(){
-	echo "Preparing NDK ..."
+	echo "Preparing NDK r28..."
 	mkdir -p "$workdir"
 	cd "$workdir"
-	if [ -z "${ANDROID_NDK_LATEST_HOME}" ]; then
-		if [ ! -d "$ndkver" ]; then
-			echo "Downloading Android NDK ..."
-			curl -L "https://dl.google.com/android/repository/${ndkver}-linux.zip" --output "${ndkver}-linux.zip" &> /dev/null
-			echo "Extracting NDK ..."
-			unzip -q "${ndkver}-linux.zip" &> /dev/null
-		fi
-        export ANDROID_NDK_HOME="$workdir/$ndkver"
-	else
-		echo "Using preinstalled Android NDK."
-        export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+	if [ ! -d "$ndkver" ]; then
+		echo "Downloading Android NDK $ndkver..."
+        # Link oficial do NDK r28 (Linux)
+		curl -L "https://dl.google.com/android/repository/${ndkver}-linux.zip" --output "${ndkver}-linux.zip" &> /dev/null
+		echo "Extracting NDK..."
+		unzip -q "${ndkver}-linux.zip" &> /dev/null
 	fi
+    export ANDROID_NDK_HOME="$workdir/$ndkver"
 }
 
 prepare_source(){
@@ -58,24 +58,24 @@ prepare_source(){
 	cd "$workdir"
 	if [ -d mesa ]; then rm -rf mesa; fi
 	
-    # 1. Clona a base Rob Clark
+    # 1. Clona BASE (Rob Clark Recente)
     echo "Cloning Base: $base_repo ($base_branch)..."
 	git clone --branch "$base_branch" "$base_repo" mesa
 	cd mesa
 
-    # Configura identidade para o merge
+    # Configura Git Identity para o merge
     git config user.email "ci@turnip.builder"
     git config user.name "Turnip CI Builder"
 
-    # 2. Traz os hacks
+    # 2. Traz HACKS (Whitebelyash)
     echo "Fetching Hacks from: $hacks_repo..."
     git remote add hacks "$hacks_repo"
     git fetch hacks "$hacks_branch"
     
-    echo "Attempting FORCE MERGE (Strategy: -X theirs)..."
-    # Tenta o merge forçando a aceitação dos hacks em caso de conflito
+    echo "Attempting FORCE MERGE (-X theirs)..."
+    # Tenta fundir. Se der conflito, o código do Hack vence.
     git merge --no-edit -X theirs "hacks/$hacks_branch" --allow-unrelated-histories || {
-        echo -e "${red}CRITICAL: Force merge failed. Code structure is too different.${nocolor}"
+        echo -e "${red}Merge failed critically. Continuing might produce broken code.${nocolor}"
         exit 1
     }
 
@@ -89,17 +89,12 @@ prepare_source(){
     cd .. 
     
 	commit_hash=$(git rev-parse HEAD)
-	if [ -f VERSION ]; then
-	    version_str=$(cat VERSION | xargs)
-	else
-	    version_str="unknown"
-	fi
-
+	version_str="API36-BleedingEdge"
 	cd "$workdir"
 }
 
 compile_mesa(){
-	echo -e "${green}Compiling Mesa...${nocolor}"
+	echo -e "${green}Compiling Mesa for SDK $target_sdk...${nocolor}"
 
 	local source_dir="$workdir/mesa"
 	local build_dir="$source_dir/build"
@@ -108,14 +103,22 @@ compile_mesa(){
 	local ndk_bin_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
 	local ndk_sysroot_path="$ndk_root_path/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
+    # --- TRUQUE DO COMPILADOR ---
+    # Se android36-clang não existir, usamos o 35 ou 34, mas o Meson vai mirar no 36.
+    # Isso resolve o erro "No such file"
+    local compiler_ver="35"
+    if [ ! -f "$ndk_bin_path/aarch64-linux-android${compiler_ver}-clang" ]; then
+        compiler_ver="34" # Fallback se for um NDK mais antigo
+    fi
+    echo "Using compiler binary version: $compiler_ver (Targeting API $target_sdk)"
+
 	local cross_file="$source_dir/android-aarch64-crossfile.txt"
     
-    # Sem pkg-config para evitar libelf
 	cat <<EOF > "$cross_file"
 [binaries]
 ar = '$ndk_bin_path/llvm-ar'
-c = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang', '--sysroot=$ndk_sysroot_path']
-cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android$sdkver-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
+c = ['ccache', '$ndk_bin_path/aarch64-linux-android${compiler_ver}-clang', '--sysroot=$ndk_sysroot_path']
+cpp = ['ccache', '$ndk_bin_path/aarch64-linux-android${compiler_ver}-clang++', '--sysroot=$ndk_sysroot_path', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '--start-no-unused-arguments', '-static-libstdc++', '--end-no-unused-arguments']
 c_ld = 'lld'
 cpp_ld = 'lld'
 strip = '$ndk_bin_path/aarch64-linux-android-strip'
@@ -133,11 +136,10 @@ EOF
 	export CFLAGS="-D__ANDROID__"
 	export CXXFLAGS="-D__ANDROID__"
 
-    # CORREÇÃO APLICADA AQUI: libarchive removido
 	meson setup "$build_dir" --cross-file "$cross_file" \
 		-Dbuildtype=release \
 		-Dplatforms=android \
-		-Dplatform-sdk-version=$sdkver \
+		-Dplatform-sdk-version=$target_sdk \
 		-Dandroid-stub=true \
 		-Dgallium-drivers= \
 		-Dvulkan-drivers=freedreno \
@@ -148,6 +150,7 @@ EOF
 		-Dvulkan-beta=true \
 		-Ddefault_library=shared \
         -Dzstd=disabled \
+        -Dlibarchive=disabled \
         --force-fallback-for=spirv-tools,spirv-headers \
 		2>&1 | tee "$workdir/meson_log"
 
@@ -174,19 +177,19 @@ package_driver(){
 	mv lib_temp.so "vulkan.ad07XX.so"
 
 	local short_hash=${commit_hash:0:7}
-	local meta_name="Turnip-BleedingEdge-${short_hash}"
+	local meta_name="Turnip-A830-SDK36-${short_hash}"
 	cat <<EOF > meta.json
 {
   "schemaVersion": 1,
   "name": "$meta_name",
-  "description": "Turnip Bleeding Edge (RobClark) + Forced Hacks. Commit $short_hash",
+  "description": "Turnip Gen8 (Bleeding Edge + Force Hacks) - SDK 36. Commit $short_hash",
   "author": "mesa-ci",
   "driverVersion": "$version_str",
   "libraryName": "vulkan.ad07XX.so"
 }
 EOF
 
-	local zip_name="Turnip-BleedingEdge-${short_hash}.zip"
+	local zip_name="Turnip-A830-SDK36-${short_hash}.zip"
 	zip -9 "$workdir/$zip_name" "vulkan.ad07XX.so" meta.json
 	echo -e "${green}Package ready: $workdir/$zip_name${nocolor}"
 }
@@ -197,15 +200,9 @@ generate_release_info() {
     local date_tag=$(date +'%Y%m%d')
 	local short_hash=${commit_hash:0:7}
 
-    echo "Turnip-BleedingEdge-${date_tag}-${short_hash}" > tag
-    echo "Turnip Bleeding Edge (Forced Hacks) - ${date_tag}" > release
-
-    echo "Automated Turnip Build. Strategy: RobClark Base + Forced Whitebelyash Hacks." > description
-    echo "" >> description
-    echo "### Build Details:" >> description
-    echo "**Base:** robclark/mesa (tu/gen8)" >> description
-    echo "**Hacks:** Forced merge from whitebelyash/mesa-tu8" >> description
-    echo "**Commit:** [${short_hash}](${base_repo%.git}/commit/${commit_hash})" >> description
+    echo "Turnip-A830-SDK36-${date_tag}-${short_hash}" > tag
+    echo "Turnip A830 (SDK 36) - ${date_tag}" > release
+    echo "Automated Turnip Build. Strategy: RobClark Base + Forced Hacks + SDK 36." > description
 }
 
 check_deps
