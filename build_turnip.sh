@@ -143,13 +143,17 @@ EOF
   "libraryName": "libvulkan_freedreno.so"
 }
 EOF
-zip -q /tmp/a8xx_turnip.zip libvulkan_freedreno.so meta.json
-cd - > /dev/null
-if ! [ -f /tmp/a8xx-$1-V$BUILD_VERSION.zip ]; then
-	echo -e "$red Failed to pack the archive! $nocolor"
-else
-	cp /tmp/a8xx-$1-V$BUILD_VERSION.zip "$workdir/"
-fi
+
+	ZIP_NAME="Turnip_Gen8_V27.zip"
+	zip -q "/tmp/$ZIP_NAME" libvulkan_freedreno.so meta.json
+	cd - > /dev/null
+
+	if ! [ -f "/tmp/$ZIP_NAME" ]; then
+		echo -e "$red Failed to pack the archive! $nocolor"
+	else
+		cp "/tmp/$ZIP_NAME" "$workdir/"
+		echo -e "$green Successfully created and copied $ZIP_NAME! $nocolor"
+	fi
 }
 
 run_all
