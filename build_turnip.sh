@@ -57,11 +57,11 @@ build_lib_for_android(){
 	git checkout origin/$1
 	
 	echo -e "${green}Limpando injeção de versão do whitebelyash...${nocolor}"
-	# Tentativa 1: Remover as strings hardcoded que ele geralmente coloca no tu_device.cc
 	sed -i 's/ - tu8//g' src/freedreno/vulkan/tu_device.cc || true
 	sed -i 's/ TUGEN8_DRV_VERSION//g' src/freedreno/vulkan/tu_device.cc || true
 	
-	# Correções preventivas para compilação no NDK r29
+	GITHASH=$(git rev-parse --short HEAD)
+
 	sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
 	sed -i 's/, hnd->handle/, (void \*)hnd->handle/g' src/util/u_gralloc/u_gralloc_fallback.c || true
 	sed -i 's/native_buffer->handle->/((const native_handle_t \*)native_buffer->handle)->/g' src/vulkan/runtime/vk_android.c || true
@@ -142,11 +142,10 @@ EOF
 	echo "Making the archive..."
 	cd /tmp/turnip-$1/lib
 	
-	GITHASH=$(git rev-parse --short HEAD)
 	cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "Turnip Gen8 V27",
+  "name": "Turnip Gen8 V${BUILD_VERSION}",
   "description": "A8xx support MR by StevenMXZ (git ${GITHASH})",
   "author": "StevenMXZ",
   "packageVersion": "1",
