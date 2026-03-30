@@ -24,7 +24,7 @@ prepare_ndk(){
 compile_mesa() {
     local repo_url="https://gitlab.freedesktop.org/mesa/mesa.git"
     local branch="main"
-    local output_name="Normal-A7xxGen1-Fix"
+    local output_name="Turnip-v26.1.0-R6"
     local mesa_dir="$workdir/mesa"
     local build_dir="$mesa_dir/build"
 
@@ -36,8 +36,6 @@ compile_mesa() {
     local githash=$(git rev-parse --short HEAD)
 
     sed -i '/a7xx_gen1 = GPUProps(/a \        has_early_preamble = False,' src/freedreno/common/freedreno_devices.py || true
-
-    rm -rf .git
     
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
     sed -i 's/, hnd->handle/, (void \*)hnd->handle/g' src/util/u_gralloc/u_gralloc_fallback.c || true
@@ -102,19 +100,21 @@ EOF
     cd "$pkg_dir"
     patchelf --set-soname "vulkan.adreno.so" vulkan.ad07XX.so
     
-    echo "{
-  \"schemaVersion\": 1,
-  \"name\": \"Turnip 26.1.0 R6",
-  \"description\": \"Mesa Main",
-  \"author\": \"StevenMXZ\",
-  \"packageVersion\": \"1\",
-  \"vendor\": \"Mesa\",
-  \"driverVersion\":"Mesa-Main",
-  \"minApi\": 28,
-  \"libraryName\": \"vulkan.ad07XX.so\"
-}" > meta.json
+    cat <<EOF >"meta.json"
+{
+  "schemaVersion": 1,
+  "name": "Turnip v26.1.0 R6",
+  "description": "Mesa Main + A7xxGen1 Preamble Fix (git $githash)",
+  "author": "StevenMXZ",
+  "packageVersion": "1",
+  "vendor": "Mesa",
+  "driverVersion": "Mesa-Main",
+  "minApi": 28,
+  "libraryName": "vulkan.ad07XX.so"
+}
+EOF
     
-    ZIP_NAME="Turnip_${output_name}_v${BUILD_VERSION}.zip"
+    ZIP_NAME="Turnip_v26.1.0_R6.zip"
     zip -9 "/tmp/$ZIP_NAME" vulkan.ad07XX.so meta.json
     
     if ! [ -f "/tmp/$ZIP_NAME" ]; then
