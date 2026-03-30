@@ -56,11 +56,14 @@ build_lib_for_android(){
 	echo "==== Building Mesa on $1 branch ===="
 	git checkout origin/$1
 	
-	echo -e "${green}Limpando injeção de versão do whitebelyash...${nocolor}"
+	GITHASH=$(git rev-parse --short HEAD)
+
 	sed -i 's/ - tu8//g' src/freedreno/vulkan/tu_device.cc || true
 	sed -i 's/ TUGEN8_DRV_VERSION//g' src/freedreno/vulkan/tu_device.cc || true
-	
-	GITHASH=$(git rev-parse --short HEAD)
+	sed -i 's/-tu8//g' VERSION || true
+
+
+	rm -rf .git
 
 	sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
 	sed -i 's/, hnd->handle/, (void \*)hnd->handle/g' src/util/u_gralloc/u_gralloc_fallback.c || true
@@ -81,7 +84,6 @@ build_lib_for_android(){
 	export CFLAGS="-D__ANDROID__ -Wno-error -Wno-deprecated-declarations -Wno-incompatible-pointer-types-discards-qualifiers -Wno-incompatible-pointer-types"
 	export CXXFLAGS="-D__ANDROID__ -Wno-error -Wno-deprecated-declarations -Wno-incompatible-pointer-types-discards-qualifiers -Wno-incompatible-pointer-types"
 
-	echo "Generating build files..."
 	cat <<EOF >"android-aarch64.txt"
 [binaries]
 ar = '$ndk/llvm-ar'
@@ -132,14 +134,12 @@ EOF
 		-Dandroid-libbacktrace=disabled \
 		--reconfigure
 
-	echo "Compiling build files..."
 	ninja -C build-android-aarch64 install
 
 	if ! [ -f /tmp/turnip-$1/lib/libvulkan_freedreno.so ]; then
 		echo -e "${red}Build failed!${nocolor}" && exit 1
 	fi
 	
-	echo "Making the archive..."
 	cd /tmp/turnip-$1/lib
 	
 	cat <<EOF >"meta.json"
