@@ -24,7 +24,7 @@ prepare_ndk(){
 compile_mesa() {
     local repo_url="https://gitlab.freedesktop.org/mesa/mesa.git"
     local branch="main"
-    local output_name="Normal"
+    local output_name="Normal-A7xxGen1-Fix"
     local mesa_dir="$workdir/mesa"
     local build_dir="$mesa_dir/build"
 
@@ -32,6 +32,16 @@ compile_mesa() {
     rm -rf "$mesa_dir"
     git clone --depth 100 -b "$branch" "$repo_url" "$mesa_dir"
     cd "$mesa_dir"
+    
+    local githash=$(git rev-parse --short HEAD)
+
+    sed -i '/a7xx_gen1 = GPUProps(/a \        has_early_preamble = False,' src/freedreno/common/freedreno_devices.py || true
+
+    rm -rf .git
+    
+    sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
+    sed -i 's/, hnd->handle/, (void \*)hnd->handle/g' src/util/u_gralloc/u_gralloc_fallback.c || true
+    sed -i 's/native_buffer->handle->/((const native_handle_t \*)native_buffer->handle)->/g' src/vulkan/runtime/vk_android.c || true
 
     mkdir -p subprojects && cd subprojects
     rm -rf spirv-tools spirv-headers
@@ -62,8 +72,8 @@ c_link_args = ['-static-libstdc++']
 cpp_link_args = ['-static-libstdc++']
 EOF
     
-    export CFLAGS="-D__ANDROID__ -Wno-error -Wno-deprecated-declarations"
-    export CXXFLAGS="-D__ANDROID__ -Wno-error -Wno-deprecated-declarations"
+    export CFLAGS="-D__ANDROID__ -Wno-error -Wno-deprecated-declarations -Wno-incompatible-pointer-types-discards-qualifiers -Wno-incompatible-pointer-types"
+    export CXXFLAGS="-D__ANDROID__ -Wno-error -Wno-deprecated-declarations -Wno-incompatible-pointer-types-discards-qualifiers -Wno-incompatible-pointer-types"
 
     meson setup "$build_dir" --cross-file android-cross.txt \
         -Dbuildtype=release \
@@ -92,21 +102,27 @@ EOF
     cd "$pkg_dir"
     patchelf --set-soname "vulkan.adreno.so" vulkan.ad07XX.so
     
-    local githash=$(git rev-parse --short HEAD)
-
     echo "{
   \"schemaVersion\": 1,
-  \"name\": \"Turnip-Upstream-Main\",
-  \"description\": \"Mesa Upstream Main ($githash)\",
-  \"author\": \"StevenMX\",
+  \"name\": \"Turnip 26.1.0 R6",
+  \"description\": \"Mesa Main",
+  \"author\": \"StevenMXZ\",
   \"packageVersion\": \"1\",
   \"vendor\": \"Mesa\",
-  \"driverVersion\": \"Mesa-Main\",
+  \"driverVersion\":"Mesa-Main",
   \"minApi\": 28,
   \"libraryName\": \"vulkan.ad07XX.so\"
 }" > meta.json
     
-    zip -9 "$workdir/Turnip-${output_name}.zip" vulkan.ad07XX.so meta.json
+    ZIP_NAME="Turnip_${output_name}_v${BUILD_VERSION}.zip"
+    zip -9 "/tmp/$ZIP_NAME" vulkan.ad07XX.so meta.json
+    
+    if ! [ -f "/tmp/$ZIP_NAME" ]; then
+        echo "Failed to pack the archive!"
+    else
+        cp "/tmp/$ZIP_NAME" "$workdir/"
+        echo "Build completed successfully! Copied $ZIP_NAME"
+    fi
 }
 
 check_deps
