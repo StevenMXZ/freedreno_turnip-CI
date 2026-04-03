@@ -22,9 +22,9 @@ prepare_ndk(){
 }
 
 compile_mesa() {
-    local repo_url="https://gitlab.freedesktop.org/mesa/mesa.git"
-    local branch="main"
-    local output_name="Turnip-v26.1.0-R6"
+    local repo_url="https://github.com/whitebelyash/mesa-tu8.git"
+    local branch="gen8"
+    local output_name="A8XX-MR37802"
     local mesa_dir="$workdir/mesa"
     local build_dir="$mesa_dir/build"
 
@@ -33,9 +33,13 @@ compile_mesa() {
     git clone --depth 100 -b "$branch" "$repo_url" "$mesa_dir"
     cd "$mesa_dir"
     
+    sed -i 's/ - tu8//g' src/freedreno/vulkan/tu_device.cc || true
+    sed -i 's/ TUGEN8_DRV_VERSION//g' src/freedreno/vulkan/tu_device.cc || true
+
     local githash=$(git rev-parse --short HEAD)
 
-    sed -i '/a7xx_gen1 = GPUProps(/a \        has_early_preamble = False,' src/freedreno/common/freedreno_devices.py || true
+    curl -sL "https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/37802.patch" -o 37802.patch
+    patch -p1 --fuzz=4 < 37802.patch || true
     
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
     sed -i 's/, hnd->handle/, (void \*)hnd->handle/g' src/util/u_gralloc/u_gralloc_fallback.c || true
@@ -96,26 +100,25 @@ EOF
     
     local pkg_dir="$workdir/pkg_$output_name"
     mkdir -p "$pkg_dir"
-    cp "$lib" "$pkg_dir/vulkan.ad07XX.so"
+    cp "$lib" "$pkg_dir/libvulkan_freedreno.so"
     cd "$pkg_dir"
-    patchelf --set-soname "vulkan.adreno.so" vulkan.ad07XX.so
     
     cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "Turnip v26.1.0 R6",
-  "description": "Mesa Main + A7xxGen1 Preamble Fix (git $githash)",
+  "name": "Turnip A8XX MR37802",
+  "description": "A8XX Branch + MR37802 (git $githash)",
   "author": "StevenMXZ",
   "packageVersion": "1",
   "vendor": "Mesa",
-  "driverVersion": "Mesa-Main",
+  "driverVersion": "Vulkan 1.4.347",
   "minApi": 28,
-  "libraryName": "vulkan.ad07XX.so"
+  "libraryName": "libvulkan_freedreno.so"
 }
 EOF
     
-    ZIP_NAME="Turnip_v26.1.0_R6.zip"
-    zip -9 "/tmp/$ZIP_NAME" vulkan.ad07XX.so meta.json
+    ZIP_NAME="Turnip_${output_name}_v${BUILD_VERSION}.zip"
+    zip -9 "/tmp/$ZIP_NAME" libvulkan_freedreno.so meta.json
     
     if ! [ -f "/tmp/$ZIP_NAME" ]; then
         echo "Failed to pack the archive!"
