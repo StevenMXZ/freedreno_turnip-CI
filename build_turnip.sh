@@ -41,6 +41,11 @@ compile_mesa() {
     curl -sL "https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/37802.patch" -o 37802.patch
     patch -p1 --fuzz=4 < 37802.patch || true
     
+    awk '/max_draw_states/ { if (++count > 1) next } 1' src/freedreno/common/freedreno_dev_info.h > temp_dev_info && mv temp_dev_info src/freedreno/common/freedreno_dev_info.h
+    
+    # REMOVENDO A PASTA .GIT PARA LIMPAR O DXVK HUD
+    rm -rf .git
+    
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
     sed -i 's/, hnd->handle/, (void \*)hnd->handle/g' src/util/u_gralloc/u_gralloc_fallback.c || true
     sed -i 's/native_buffer->handle->/((const native_handle_t \*)native_buffer->handle)->/g' src/vulkan/runtime/vk_android.c || true
