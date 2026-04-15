@@ -22,9 +22,9 @@ prepare_ndk(){
 }
 
 compile_mesa() {
-    local repo_url="https://github.com/whitebelyash/mesa-tu8.git"
-    local branch="gen8"
-    local output_name="A8XX-Normal"
+    local repo_url="https://gitlab.freedesktop.org/mesa/mesa.git"
+    local branch="main"
+    local output_name="Turnip-Normal"
     local mesa_dir="$workdir/mesa"
     local build_dir="$mesa_dir/build"
 
@@ -33,12 +33,9 @@ compile_mesa() {
     git clone --depth 100 -b "$branch" "$repo_url" "$mesa_dir"
     cd "$mesa_dir"
     
-    sed -i 's/ - tu8//g' src/freedreno/vulkan/tu_device.cc || true
-    sed -i 's/ TUGEN8_DRV_VERSION//g' src/freedreno/vulkan/tu_device.cc || true
-
     local githash=$(git rev-parse --short HEAD)
 
-    rm -rf .git
+    sed -i '/a7xx_gen1 = GPUProps(/a \        has_early_preamble = False,' src/freedreno/common/freedreno_devices.py || true
     
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
     sed -i 's/, hnd->handle/, (void \*)hnd->handle/g' src/util/u_gralloc/u_gralloc_fallback.c || true
@@ -99,25 +96,26 @@ EOF
     
     local pkg_dir="$workdir/pkg_$output_name"
     mkdir -p "$pkg_dir"
-    cp "$lib" "$pkg_dir/libvulkan_freedreno.so"
+    cp "$lib" "$pkg_dir/vulkan.ad07XX.so"
     cd "$pkg_dir"
+    patchelf --set-soname "vulkan.adreno.so" vulkan.ad07XX.so
     
     cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "Turnip A8XX",
-  "description": "A8XX Branch (git $githash)",
+  "name": "Turnip v26.2.0",
+  "description": "Mesa Main",
   "author": "StevenMXZ",
   "packageVersion": "1",
   "vendor": "Mesa",
-  "driverVersion": "Vulkan 1.4.347",
+  "driverVersion": "Mesa-Main",
   "minApi": 28,
-  "libraryName": "libvulkan_freedreno.so"
+  "libraryName": "vulkan.ad07XX.so"
 }
 EOF
     
-    ZIP_NAME="Turnip_${output_name}_v${BUILD_VERSION}.zip"
-    zip -9 "/tmp/$ZIP_NAME" libvulkan_freedreno.so meta.json
+    ZIP_NAME="Turnip_Normal_v${BUILD_VERSION}.zip"
+    zip -9 "/tmp/$ZIP_NAME" vulkan.ad07XX.so meta.json
     
     if ! [ -f "/tmp/$ZIP_NAME" ]; then
         echo "Failed to pack the archive!"
