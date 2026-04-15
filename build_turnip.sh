@@ -24,7 +24,7 @@ prepare_ndk(){
 compile_mesa() {
     local repo_url="https://github.com/whitebelyash/mesa-tu8.git"
     local branch="gen8"
-    local output_name="A8XX-MR37802"
+    local output_name="A8XX-Normal"
     local mesa_dir="$workdir/mesa"
     local build_dir="$mesa_dir/build"
 
@@ -38,12 +38,6 @@ compile_mesa() {
 
     local githash=$(git rev-parse --short HEAD)
 
-    curl -sL "https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/37802.patch" -o 37802.patch
-    patch -p1 --fuzz=4 < 37802.patch || true
-    
-    awk '/max_draw_states/ { if (++count > 1) next } 1' src/freedreno/common/freedreno_dev_info.h > temp_dev_info && mv temp_dev_info src/freedreno/common/freedreno_dev_info.h
-    
-    # REMOVENDO A PASTA .GIT PARA LIMPAR O DXVK HUD
     rm -rf .git
     
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
@@ -111,8 +105,8 @@ EOF
     cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "Turnip A8XX MR37802",
-  "description": "A8XX Branch + MR37802 (git $githash)",
+  "name": "Turnip A8XX",
+  "description": "A8XX Branch (git $githash)",
   "author": "StevenMXZ",
   "packageVersion": "1",
   "vendor": "Mesa",
