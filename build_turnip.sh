@@ -1,7 +1,7 @@
 #!/bin/bash -e
 set -o pipefail
 
-deps="git meson ninja patchelf unzip curl pip flex bison zip glslangValidator python3"
+deps="git meson ninja patchelf unzip curl pip flex bison zip glslangValidator python3 patch"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 ndk="$workdir/$ndkver/toolchains/llvm/prebuilt/linux-x86_64/bin"
@@ -41,7 +41,7 @@ build_lib_for_android(){
     cd "$workdir/$srcfolder"
     
     wget -q "https://github.com/whitebelyash/mesa-tu8/releases/download/patchset-head-v2/$2" -O "$2"
-    git apply "$2"
+    patch -p1 < "$2" || true
 
     sed -i '/a7xx_gen1 = GPUProps(/a \        has_early_preamble = False,' src/freedreno/common/freedreno_devices.py || true
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
@@ -127,12 +127,12 @@ EOF
     cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "Turnip Gen8 V29",
-  "description": "Turnip a8xx",
-  "author": "StevenMX",
+  "name": "Mesa Turnip",
+  "description": "Mesa",
+  "author": "stevenmx",
   "packageVersion": "1",
   "vendor": "Mesa",
-  "driverVersion": "Vulkan 1.4.348",
+  "driverVersion": "Vulkan 1.4.335",
   "minApi": 28,
   "libraryName": "libvulkan_freedreno.so"
 }
