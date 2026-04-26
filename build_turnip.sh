@@ -43,6 +43,9 @@ build_lib_for_android(){
     cd "$workdir/$srcfolder"
     git checkout "origin/$1"
 
+    sed -i 's/ (%s)//g' src/freedreno/vulkan/tu_device.cc || true
+    sed -i 's/ (%s)//g' src/freedreno/vulkan/tu_device.c || true
+
     sed -i '/a7xx_gen1 = GPUProps(/a \        has_early_preamble = False,' src/freedreno/common/freedreno_devices.py || true
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
     sed -i 's/, hnd->handle/, (void \*)hnd->handle/g' src/util/u_gralloc/u_gralloc_fallback.c || true
@@ -127,11 +130,11 @@ EOF
     cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "A8XX MR",
-  "description": "A8xx support MR (git $GITHASH)",
+  "name": "Turnip Gen8 V29",
+  "description": "A8xx support",
   "author": "stevenmx",
   "packageVersion": "1",
-  "vendor": "msa",
+  "vendor": "Mesa",
   "driverVersion": "Vulkan 1.4.348",
   "minApi": 28,
   "libraryName": "libvulkan_freedreno.so"
