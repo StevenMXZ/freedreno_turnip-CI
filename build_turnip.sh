@@ -35,7 +35,8 @@ prepare_workdir(){
     rm -rf "$srcfolder"
     git clone "$mesasrc" --depth=1 --no-single-branch "$srcfolder"
     cd "$srcfolder"
-    echo "#define TUGEN8_DRV_VERSION \"v$BUILD_VERSION\"" > ./src/freedreno/vulkan/tu_version.h
+    
+    echo "#define TUGEN8_DRV_VERSION \"\"" > ./src/freedreno/vulkan/tu_version.h
 }
 
 build_lib_for_android(){
@@ -126,19 +127,19 @@ EOF
     cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "A8XX support",
-  "description": "A8xx support MR",
+  "name": "A8XX MR",
+  "description": "A8xx support MR (git $GITHASH)",
   "author": "stevenmx",
   "packageVersion": "1",
-  "vendor": "Mesa",
-  "driverVersion": "Vulkan 1.4.335",
+  "vendor": "msa",
+  "driverVersion": "Vulkan 1.4.348",
   "minApi": 28,
   "libraryName": "libvulkan_freedreno.so"
 }
 EOF
 
-    zip -9 "/tmp/a8xx-$1-V$BUILD_VERSION.zip" libvulkan_freedreno.so meta.json
-    cp "/tmp/a8xx-$1-V$BUILD_VERSION.zip" "$workdir/"
+    zip -9 "/tmp/a8xx-$1-V${BUILD_VERSION}.zip" libvulkan_freedreno.so meta.json
+    cp "/tmp/a8xx-$1-V${BUILD_VERSION}.zip" "$workdir/"
 }
 
 run_all
