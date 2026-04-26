@@ -45,6 +45,10 @@ build_lib_for_android(){
 
     sed -i 's/ (%s)//g' src/freedreno/vulkan/tu_device.cc || true
     sed -i 's/ (%s)//g' src/freedreno/vulkan/tu_device.c || true
+    sed -i 's/"turnip Mesa driver (whitebelyash branch)"/"Turnip"/g' src/freedreno/vulkan/tu_device.cc || true
+    sed -i 's/"Mesa " PACKAGE_VERSION MESA_GIT_SHA1/""/g' src/freedreno/vulkan/tu_device.cc || true
+    sed -i 's/"turnip Mesa driver (whitebelyash branch)"/"Turnip"/g' src/freedreno/vulkan/tu_device.c || true
+    sed -i 's/"Mesa " PACKAGE_VERSION MESA_GIT_SHA1/""/g' src/freedreno/vulkan/tu_device.c || true
 
     sed -i '/a7xx_gen1 = GPUProps(/a \        has_early_preamble = False,' src/freedreno/common/freedreno_devices.py || true
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
