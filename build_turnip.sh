@@ -1,19 +1,18 @@
 #!/bin/bash -e
 set -o pipefail
 
-deps="git meson ninja patchelf unzip curl pip flex bison zip glslangValidator python3 patch"
+deps="git meson ninja patchelf unzip curl pip flex bison zip glslangValidator python3"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 ndk="$workdir/$ndkver/toolchains/llvm/prebuilt/linux-x86_64/bin"
-sdkver="35"
-mesasrc="https://gitlab.freedesktop.org/mesa/mesa.git"
+mesasrc="https://github.com/whitebelyash/mesa-tu8.git"
 srcfolder="mesa"
 BUILD_VERSION="${BUILD_VERSION:-1.0}"
 
 run_all(){
     check_deps
     prepare_workdir
-    build_lib_for_android main tu8_kgsl.patch
+    build_lib_for_android gen8
 }
 
 check_deps(){
@@ -27,21 +26,21 @@ check_deps(){
 
 prepare_workdir(){
     mkdir -p "$workdir" && cd "$workdir"
-    
+
     if [ ! -d "$ndkver" ]; then
-        curl -sL "https://dl.google.com/android/repository/${ndkver}-linux.zip" -o "${ndkver}-linux.zip"
-        unzip -q "${ndkver}-linux.zip"
+        curl -sL "https://dl.google.com/android/repository/${ndkver}-linux.zip" -o "${ndkver}-linux.zip" &> /dev/null
+        unzip -q "${ndkver}-linux.zip" &> /dev/null
     fi
-    
+
     rm -rf "$srcfolder"
-    git clone "$mesasrc" --depth=1 -b main "$srcfolder"
+    git clone "$mesasrc" --depth=1 --no-single-branch "$srcfolder"
+    cd "$srcfolder"
+    echo "#define TUGEN8_DRV_VERSION \"v$BUILD_VERSION\"" > ./src/freedreno/vulkan/tu_version.h
 }
 
 build_lib_for_android(){
     cd "$workdir/$srcfolder"
-    
-    wget -q "https://github.com/whitebelyash/mesa-tu8/releases/download/patchset-head-v2/$2" -O "$2"
-    patch -p1 < "$2" || true
+    git checkout "origin/$1"
 
     sed -i '/a7xx_gen1 = GPUProps(/a \        has_early_preamble = False,' src/freedreno/common/freedreno_devices.py || true
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
@@ -61,7 +60,7 @@ build_lib_for_android(){
     export OBJDUMP=llvm-objdump
     export OBJCOPY=llvm-objcopy
     export LDFLAGS="-fuse-ld=lld"
-    
+
     GITHASH=$(git rev-parse --short HEAD)
 
     local cver="36"
@@ -107,7 +106,7 @@ EOF
         -Dstrip=true \
         -Dplatforms=android \
         -Dvideo-codecs= \
-        -Dplatform-sdk-version="$sdkver" \
+        -Dplatform-sdk-version=36 \
         -Dandroid-stub=true \
         -Dgallium-drivers= \
         -Dvulkan-drivers=freedreno \
@@ -127,8 +126,8 @@ EOF
     cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "Mesa Turnip",
-  "description": "Mesa",
+  "name": "A8XX support",
+  "description": "A8xx support MR",
   "author": "stevenmx",
   "packageVersion": "1",
   "vendor": "Mesa",
@@ -138,8 +137,8 @@ EOF
 }
 EOF
 
-    zip -9 "/tmp/mesa-turnip-$1-V$BUILD_VERSION.zip" libvulkan_freedreno.so meta.json
-    cp "/tmp/mesa-turnip-$1-V$BUILD_VERSION.zip" "$workdir/"
+    zip -9 "/tmp/a8xx-$1-V$BUILD_VERSION.zip" libvulkan_freedreno.so meta.json
+    cp "/tmp/a8xx-$1-V$BUILD_VERSION.zip" "$workdir/"
 }
 
 run_all
