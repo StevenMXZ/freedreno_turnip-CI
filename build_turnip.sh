@@ -1,18 +1,18 @@
 #!/bin/bash -e
 set -o pipefail
 
-deps="git meson ninja patchelf unzip curl pip flex bison zip glslangValidator python3"
+deps="git meson ninja patchelf unzip curl pip flex bison zip glslangValidator python3 patch"
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 ndk="$workdir/$ndkver/toolchains/llvm/prebuilt/linux-x86_64/bin"
-mesasrc="https://github.com/whitebelyash/mesa-tu8.git"
+mesasrc="https://gitlab.freedesktop.org/mesa/mesa.git"
 srcfolder="mesa"
 BUILD_VERSION="${BUILD_VERSION:-1.0}"
 
 run_all(){
     check_deps
     prepare_workdir
-    build_lib_for_android gen8
+    build_lib_for_android
 }
 
 check_deps(){
@@ -33,18 +33,20 @@ prepare_workdir(){
     fi
 
     rm -rf "$srcfolder"
-    git clone "$mesasrc" --depth=1 --no-single-branch "$srcfolder"
-    cd "$srcfolder"
-    
-    echo "#define TUGEN8_DRV_VERSION \"\"" > ./src/freedreno/vulkan/tu_version.h
+    git clone "$mesasrc" --depth=1 -b main "$srcfolder"
+
+    rm -rf weab_repo
+    git clone "https://github.com/Weab-chan/freedreno_turnip-CI.git" --depth=1 weab_repo
 }
 
 build_lib_for_android(){
     cd "$workdir/$srcfolder"
-    git checkout "origin/$1"
 
-    sed -i 's/ (%s)//g' src/freedreno/vulkan/tu_device.cc || true
-    sed -i 's/ (%s)//g' src/freedreno/vulkan/tu_device.c || true
+    if [ -d "$workdir/weab_repo/patches" ]; then
+        for p in "$workdir/weab_repo/patches/"*.patch; do
+            patch -p1 < "$p" || true
+        done
+    fi
 
     sed -i '/a7xx_gen1 = GPUProps(/a \        has_early_preamble = False,' src/freedreno/common/freedreno_devices.py || true
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
@@ -105,7 +107,7 @@ EOF
     meson setup build-android-aarch64 \
         --cross-file "android-aarch64.txt" \
         --native-file "native.txt" \
-        --prefix "/tmp/turnip-$1" \
+        --prefix "/tmp/turnip-main" \
         -Dbuildtype=release \
         -Dstrip=true \
         -Dplatforms=android \
@@ -121,17 +123,17 @@ EOF
 
     ninja -C build-android-aarch64 install
 
-    if [ ! -f "/tmp/turnip-$1/lib/libvulkan_freedreno.so" ]; then
+    if [ ! -f "/tmp/turnip-main/lib/libvulkan_freedreno.so" ]; then
         exit 1
     fi
 
-    cd "/tmp/turnip-$1/lib"
+    cd "/tmp/turnip-main/lib"
     
     cat <<EOF >"meta.json"
 {
   "schemaVersion": 1,
-  "name": "Turnip Gen8 V29",
-  "description": "A8xx support",
+  "name": "Turnip Normal Main",
+  "description": "Official Mesa Main with CI patches",
   "author": "stevenmx",
   "packageVersion": "1",
   "vendor": "Mesa",
@@ -141,8 +143,8 @@ EOF
 }
 EOF
 
-    zip -9 "/tmp/a8xx-$1-V${BUILD_VERSION}.zip" libvulkan_freedreno.so meta.json
-    cp "/tmp/a8xx-$1-V${BUILD_VERSION}.zip" "$workdir/"
+    zip -9 "/tmp/turnip-main-V${BUILD_VERSION}.zip" libvulkan_freedreno.so meta.json
+    cp "/tmp/turnip-main-V${BUILD_VERSION}.zip" "$workdir/"
 }
 
 run_all
