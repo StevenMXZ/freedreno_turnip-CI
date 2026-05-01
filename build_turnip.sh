@@ -5,7 +5,7 @@ deps="git meson ninja patchelf unzip curl pip flex bison zip glslangValidator py
 workdir="$(pwd)/turnip_workdir"
 ndkver="android-ndk-r29"
 ndk="$workdir/$ndkver/toolchains/llvm/prebuilt/linux-x86_64/bin"
-sdkver="35"
+sdkver="36"
 mesasrc="https://gitlab.freedesktop.org/mesa/mesa.git"
 srcfolder="mesa"
 BUILD_VERSION="${BUILD_VERSION:-1.0}"
@@ -40,8 +40,7 @@ prepare_workdir(){
 build_lib_for_android(){
     cd "$workdir/$srcfolder"
     
-    wget -q "https://github.com/whitebelyash/mesa-tu8/releases/download/patchset-head-v2/$2" -O "$2"
-    patch -p1 < "$2" || true
+    
 
     sed -i '/a7xx_gen1 = GPUProps(/a \        has_early_preamble = False,' src/freedreno/common/freedreno_devices.py || true
     sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
